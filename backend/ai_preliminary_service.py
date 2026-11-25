@@ -1,6 +1,7 @@
 """Project-local orchestration for the draft-only AI preliminary cooling path."""
 
 import contextvars
+from collections import OrderedDict
 import json
 import threading
 import math
@@ -10,6 +11,7 @@ import re
 import tempfile
 from contextlib import contextmanager
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 
 from ai import design_weather
@@ -192,6 +194,15 @@ def _file_fingerprint(path, default, use_saved=False):
     return value
 
 
+# Bump when a rule in the code changes what the model is assembled from saved inputs that are themselves unchanged
+# (a room's default scope, how an answered construction reaches a surface). Every saved result then shows as out of
+# date, and updating it assembles the model again. 2: kitchens not cooled by default; an answered wall or roof's sun
+# and thermal mass follow the answer; a house's NatHERS/BASIX certificate walls, ceiling and roof are read (2026-11-23).
+# 3: only a commercial kitchen (restaurant, shop) is left uncooled; a house's kitchen is cooled again (2026-11-23).
+# 4: outside air drier than the room adds no moisture load instead of a negative one (2026-11-24).
+MODEL_RULES_VERSION = 4
+
+
 def _sources(paths):
     run = _read(paths["run"], {})
     proposal = _proposal_for_resolution(paths, equipment=False)
@@ -253,13 +264,22 @@ def _sources(paths):
         "quick_fixes": _file_fingerprint(paths["root"] / "quick_fixes.json", {}),
         # A house's window glass read from its energy certificate (P8) changes the draft's glazing.
         "glazing_certificates": ai_preliminary.fingerprint(_certificate_answers(paths)),
+        # The assembly rules in the code (MODEL_RULES_VERSION): a saved result from older rules is out of date, so
+        # "Update the final load" assembles the model again instead of recalculating the old one.
+        "model_rules": MODEL_RULES_VERSION,
+        # Rooms joined from pieces (backend/room_join_service.py). Only a job with joins carries the key, so the
+        # results of every job without one stay current.
+        **({"room_joins": _file_fingerprint(paths["root"] / "room_joins.json", {})}
+           if (_read(paths["root"] / "room_joins.json", {}) or {}).get("joins") else {}),
     }
 
 
 def _certificate_answers(paths):
+    from ai import certificate_constructions
     from backend import autonomous_tasks_service
     try:
-        return autonomous_tasks_service.drawing_glazing_certificates(paths["root"])
+        return {"glazing": autonomous_tasks_service.drawing_glazing_certificates(paths["root"]),
+                "constructions": certificate_constructions.read_job(paths["root"])}
     except (OSError, ValueError, KeyError, TypeError):
         return []
 
@@ -301,10 +321,59 @@ def _preliminary_geometry(paths):
     return _once("preliminary_geometry", paths, lambda: _shared_preliminary_geometry(paths), state=_geometry_input_signature)
 
 
+_GEOMETRY_FINGERPRINT_MEMO = {}
+# The draft geometry's fingerprint, saved in the job folder with the inputs and code it was worked out from: after a
+# server restart the first freshness check rebuilt the whole draft geometry (about 8 s on the Turramurra house) only
+# to fingerprint it (2026-11-20).
+GEOMETRY_FINGERPRINT_CACHE = "preliminary_geometry_fingerprint.cache"
+
+
+@lru_cache(maxsize=1)
+def _source_code_fingerprint():
+    """A fingerprint of the calculator's Python source (ai/ and backend/), once per process: a value saved by another
+    version of the code is never reused."""
+    import hashlib
+    digest = hashlib.sha256()
+    source_root = Path(__file__).resolve().parents[1]
+    for folder in ("ai", "backend"):
+        for path in sorted((source_root / folder).rglob("*.py")):
+            digest.update(str(path.relative_to(source_root)).encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
 def _preliminary_geometry_fingerprint(paths):
-    """ai_preliminary.fingerprint of the draft geometry, for the source fingerprints (no copy needed)."""
-    return _once("preliminary_geometry_fingerprint", paths, lambda: ai_preliminary.fingerprint(_preliminary_geometry(paths)),
-                 state=_geometry_input_signature)
+    """ai_preliminary.fingerprint of the draft geometry, for the source fingerprints (no copy needed).
+
+    Kept between requests while every geometry input is unchanged (the same signature as the geometry memo):
+    copying and hashing the cached geometry again took over a second on each freshness check (2026-11-20)."""
+    key = str(Path(paths["root"]).resolve())
+    signature = _geometry_input_signature(paths)
+    with _GEOMETRY_MEMO_LOCK:
+        hit = _GEOMETRY_FINGERPRINT_MEMO.get(key)
+        if hit and hit[0] == signature:
+            return hit[1]
+    saved_key = ai_preliminary.fingerprint({"inputs": [list(row) for row in signature], "code": _source_code_fingerprint()})
+    saved_path = Path(paths["root"]) / GEOMETRY_FINGERPRINT_CACHE
+    try:
+        saved = json.loads(saved_path.read_text(encoding="utf-8"))
+        value = saved["fingerprint"] if saved.get("key") == saved_key else None
+    except (OSError, ValueError, TypeError, KeyError):
+        value = None
+    if value is None:
+        value = _once("preliminary_geometry_fingerprint", paths,
+                      lambda: ai_preliminary.fingerprint(_preliminary_geometry(paths)), state=lambda _paths: signature)
+        try:   # kept across server restarts; not a .json file, so job-file signatures are unchanged by it
+            staged = saved_path.with_suffix(".tmp")
+            staged.write_text(json.dumps({"key": saved_key, "fingerprint": value}), encoding="utf-8")
+            os.replace(staged, saved_path)
+        except OSError:
+            pass
+    with _GEOMETRY_MEMO_LOCK:
+        _GEOMETRY_FINGERPRINT_MEMO.pop(key, None)
+        _GEOMETRY_FINGERPRINT_MEMO[key] = (signature, value)
+        while len(_GEOMETRY_FINGERPRINT_MEMO) > _GEOMETRY_MEMO_LIMIT:
+            _GEOMETRY_FINGERPRINT_MEMO.pop(next(iter(_GEOMETRY_FINGERPRINT_MEMO)))
+    return value
 
 
 def _shared_preliminary_geometry(paths):
@@ -377,9 +446,43 @@ def _room_use_sources(paths):
     }
 
 
+QUICK_FIX_COOLING_REVIEWER = "Quick fixes (cooled)"
+
+
+def _with_quick_fix_cooling(paths, artifact):
+    """A room switched to "Cool it" on the quick-fix screen whose use left it uncooled (a restaurant kitchen, a room the
+    drawings didn't settle) is cooled: its use is kept as a reviewer's choice, which those rules give way to. Without
+    this the switch did nothing, as the room was left out before the room selection read it (Casa Nova, 2026-11-23).
+    Switching it back removes that choice. A room another reviewer has chosen a use for is left as they set it."""
+    from backend import quick_fix_service
+    choices = quick_fix_service.cooled_choices(paths["root"])
+    comfort = {"comfort_hvac", "comfort_hvac_with_process_exception"}
+    for row in list(artifact.get("records") or []):
+        room_id = row.get("room_id")
+        if choices.get(room_id) is True and row.get("space_scope") not in comfort and not row.get("override"):
+            artifact = room_use_resolution.apply_override(artifact, room_id, row["taxonomy_id"], QUICK_FIX_COOLING_REVIEWER,
+                                                          "Marked cooled on the quick-fix screen.")
+    return artifact
+
+
+def _without_stale_quick_fix_cooling(paths, existing):
+    """The saved room uses less any quick-fix "Cool it" choice since switched back, so resolving them applies the use's
+    own rules again (clearing the choice afterwards would keep the cooled scope it gave)."""
+    from backend import quick_fix_service
+    choices = quick_fix_service.cooled_choices(paths["root"])
+    existing = deepcopy(existing) if isinstance(existing, dict) else existing
+    for row in (existing or {}).get("records") or []:
+        if ((row.get("override") or {}).get("reviewer") == QUICK_FIX_COOLING_REVIEWER
+                and choices.get(row.get("room_id")) is not True):
+            row["override"] = None
+    return existing
+
+
 def _resolve_room_uses(paths, persist=False):
     from backend.room_use_resolution_service import _dwelling_context, gather_use_evidence
     existing = _read(paths["room_use"], room_use_resolution.empty_room_use_resolution())
+    saved = existing
+    existing = _without_stale_quick_fix_cooling(paths, existing)
     proposal = _proposal_for_resolution(paths, equipment=False)
     artifact = room_use_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}),
@@ -387,11 +490,12 @@ def _resolve_room_uses(paths, persist=False):
         _room_use_sources(paths), existing, use_evidence=gather_use_evidence(paths["root"]),
         dwelling_context=_dwelling_context(paths["root"]),
     )
+    artifact = _with_quick_fix_cooling(paths, artifact)
     if persist:
         _write(paths["room_use"], artifact)
         productization.record_change_if_fingerprint_changed(
             paths["root"], action="room_use_resolution_automatically_resolved", target=paths["room_use"].name,
-            previous_fingerprint=room_use_resolution.fingerprint(existing), new_fingerprint=artifact["fingerprint"],
+            previous_fingerprint=room_use_resolution.fingerprint(saved), new_fingerprint=artifact["fingerprint"],
             affected_ids=[row["room_id"] for row in artifact.get("records", [])],
         )
     return artifact
@@ -817,6 +921,23 @@ def _proposal_with_skill_findings(paths):
         str(row.get("label", "")).strip().casefold(): row for row in proposal["rooms"]
         if isinstance(row, dict) and row.get("label")
     }
+    # A finding for a merged same-name room ("Ensuite", saved before separate rooms of one name were told apart) is
+    # each numbered room's ("Ensuite (1)", "(2)", ...): it must not bring the merged room back as an extra room.
+    occurrences = {}
+    for row in proposal["rooms"]:
+        if isinstance(row, dict) and row.get("source") == "numbered_from_repeated_label" and row.get("repeated_label"):
+            merged = room_use_resolution.room_identity(row["repeated_label"], row.get("level_name") or "Unassigned level")
+            occurrences.setdefault(merged, []).append(row)
+    expanded = []
+    for index, finding in accepted_rows:
+        merged = str(finding.get("room_id", "")) if isinstance(finding, dict) else ""
+        if merged in occurrences and merged not in rooms_by_id:
+            for row in occurrences[merged]:
+                inference_by_id.setdefault(str(row["room_id"]), inference_by_id.get(merged, []))
+                expanded.append((index, {**deepcopy(finding), "room_id": str(row["room_id"]), "original_label": row["label"]}))
+        else:
+            expanded.append((index, finding))
+    accepted_rows = expanded
     unresolved_fields = identity_proposal.get("unresolved_fields", []) if isinstance(identity_proposal, dict) else []
     candidates = list(geometry_candidates.values())
     accepted_room_ids = set()
@@ -1502,6 +1623,24 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             # default. Validate strictly here so that corruption is visible to
             # the reviewer instead of looking like simply absent evidence.
             trace_registry = json.loads(trace_registry_path.read_text(encoding="utf-8"))
+        # A numeric plan-up bearing explicitly printed with a certificate is a
+        # declaration for this calculation. A reviewer declaration still wins.
+        from ai import certificate_constructions
+        for certificate in certificate_constructions.read_job(paths["root"]):
+            if "north" not in certificate:
+                continue
+            page_north = trace_registry.setdefault("page_north", {})
+            plan_pages = {str(row.get("page")) for row in trace_registry.get("records", [])
+                          if isinstance(row, dict) and isinstance(row.get("page"), int)}
+            for page in plan_pages:
+                page_north.setdefault(page, {"page": int(page), "declaration_source": "certificate"})
+            for page, declaration in page_north.items():
+                if isinstance(declaration, dict) and declaration.get("declaration_source", "reviewer") == "reviewer":
+                    continue
+                if isinstance(declaration, dict):
+                    declaration.update(plan_up_azimuth_deg=certificate["north"]["plan_up_azimuth_deg"],
+                                       source=f"{certificate['certificate']} certificate p{certificate['page']}: {certificate['north']['excerpt']}",
+                                       declaration_source="certificate")
         traced_areas = reviewer_room_geometry_service.current_traced_areas(paths["root"])
     except (OSError, ValueError, TypeError, KeyError):
         traced_areas = {}
@@ -1644,9 +1783,20 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                         part = {"trace_id": f"area-only-{room_use_id}", "page": traced_area.get("page")}
                         citation = {"page": traced_area.get("page"), "reference": f"Room area ({traced_area.get('area_source', '')})",
                                     "excerpt": str(traced_area.get("printed_text") or room.get("label", ""))}
-                        roof, roof_note = _roof_assumption(paths, phase1_ai_input, phase1_site, room)
                         area_note = (f"{room.get('label', 'This room')}'s area ({area_only_area:g} m²) is "
                                      f"{traced_area.get('area_source', 'from the drawings')}: no outline was available.")
+                        house_level_roof = _house_level_roof(house, room, area_only=True) if house is not None else None
+                        if house_level_roof and not skip_roof:
+                            # A house: what is over the room follows from its level (no tenancy roof question).
+                            tops = _house_roof_surfaces(room, part, area_only_area, house_level_roof, citation, "")
+                            for surface in tops:
+                                roof_notes = surface.pop("phase1_assumptions", None) or [
+                                    {"component": "roof", "reason": surface.pop("phase1_assumption", "")}]
+                                surface.pop("phase1_assumption", None)
+                                surface["phase1_assumptions"] = [{"component": "room area", "reason": area_note}, *roof_notes]
+                            proposal["surfaces"].extend(tops)
+                        roof, roof_note = ((None, "") if house_level_roof else
+                                           _roof_assumption(paths, phase1_ai_input, phase1_site, room))
                         top = {"surface_key": f"reviewer-trace:{part['trace_id']}:" + ("roof" if roof == "exposed" else "ceiling"),
                                "label": f"{room.get('label', 'Room')} " + ("roof" if roof == "exposed" else "ceiling (floor above)"),
                                "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
@@ -1661,7 +1811,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                "rationale": "Roof or ceiling over the room's area (no outline).",
                                "phase1_assumptions": [{"component": "room area", "reason": area_note},
                                                       *([{"component": "roof", "reason": roof_note}] if roof_note else [])]}
-                        proposal["surfaces"].append(top)
+                        if not house_level_roof:
+                            proposal["surfaces"].append(top)
                         if house is not None and house["floors"]:
                             proposal["surfaces"].extend(_house_floor_surfaces(room, part, area_only_area,
                                 _house_area_only_floor(house, room), citation, ""))
@@ -1685,7 +1836,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                      if isinstance(row, dict) and type(row.get("index")) is int}
                     roof = part.get("roof", "unknown")
                     roof_note = ""
-                    if roof == "unknown":
+                    house_level_roof = (_house_level_roof(house, room) if house is not None and roof == "unknown"
+                                        and part.get("roof_source") != "reviewer" else None)
+                    if roof == "unknown" and not house_level_roof:
                         roof, roof_note = _roof_assumption(paths, phase1_ai_input, phase1_site, room)
                     area = ai_preliminary._number(part.get("area_m2"))
                     calibration = part.get("calibration", {})
@@ -1698,7 +1851,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                     north_note = north_basis.get("reason", "") if north_basis.get("label") in {"unlabelled", "magnetic", "grid"} else ""
                     part_unknown_edges = []
                     house_roof = ((house or {}).get("roofs", {}).get(part.get("trace_id"))
-                                  if part.get("roof_source") != "reviewer" else None)
+                                  if part.get("roof_source") != "reviewer" else None) or house_level_roof
+                    if house_roof and house_roof.get("unmatched"):
+                        house_roof = _house_level_roof(house, room, why=house_roof["unmatched"])
                     if house_roof and area and not skip_roof:
                         # A house: what is over the room, from the level plans (no AI roof question in a house).
                         proposal["surfaces"].extend(_house_roof_surfaces(room, part, area, house_roof, citation, declaration_reviewer))
@@ -2230,6 +2385,7 @@ def _workspace_report(report):
                                 for item in (report.get("phase1_assumptions", []) or [])[:200] if isinstance(item, dict)],
         "design_conditions_basis": report.get("design_conditions_basis", {}),
         "seasonal": report.get("seasonal") if isinstance(report.get("seasonal"), dict) else {},
+        "design_day_profile": _design_day_profile(report),
         "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
                                               for item in report.get("refrigeration_process_exclusions", [])
                                               if isinstance(item, dict)],
@@ -2283,13 +2439,140 @@ def _room_peaks(report):
                 item = {"room_id": str(room["room_id"]), "name": str(room.get("name", "")),
                         "design_total_kw": peak["design_total_kw"],
                         "hour": peak.get("display_hour", peak.get("hour"))}
+                if (report.get("room_identities") or {}).get(str(room["room_id"])):
+                    item["source_room_id"] = report["room_identities"][str(room["room_id"])]
                 if room.get("area_m2") is not None:
                     item["area_m2"] = room["area_m2"]
                 if isinstance(peak.get("components"), dict):
                     item["components"] = peak["components"]
+                profile = _hour_profile(room.get("hours"))
+                if profile:
+                    item["hourly"] = profile
+                own = _own_peak(scenarios, str(room["room_id"]))
+                if own:
+                    item["own_peak"] = own
                 peaks.append(item)
         break  # only the design day's rooms
+    joins = report.get("room_joins") or []
+    by_source = {row.get("source_room_id"): row for row in peaks}
+    for join in joins:
+        for member_id in join.get("member_ids", []):
+            if member_id in by_source:
+                by_source[member_id]["join_id"] = join["id"]
+        joined = _joined_peak(scenarios, report.get("room_identities") or {}, join)
+        if joined:
+            peaks.append(joined)
     return peaks
+
+
+def _joined_peak(scenarios, identities, join):
+    """Peak of simultaneous member hours across all design days, with their component totals."""
+    members = set(join.get("member_ids") or [])
+    best = None
+    for scenario in scenarios:
+        rooms = [room for room in scenario.get("rooms", []) if identities.get(str(room.get("room_id"))) in members]
+        if not rooms or any(len(room.get("hours") or []) != 24 for room in rooms):
+            continue
+        hours = []
+        for index in range(24):
+            parts = [room["hours"][index] for room in rooms]
+            if any(not isinstance(part.get("design_total_kw"), (int, float)) for part in parts):
+                hours = []
+                break
+            components = {}
+            for part in parts:
+                for name, component in (part.get("components") or {}).items():
+                    if not isinstance(component, dict):
+                        continue
+                    total = components.setdefault(name, {"sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0})
+                    for key in total:
+                        total[key] += float(component.get(key) or 0)
+            hours.append({"hour": parts[0].get("hour", index),
+                          "design_total_kw": sum(part["design_total_kw"] for part in parts),
+                          "sensible_kw": sum(float(part.get("subtotal_sensible_kw") or 0) for part in parts),
+                          "latent_kw": sum(float(part.get("subtotal_latent_kw") or 0) for part in parts),
+                          "components": components})
+        if not hours:
+            continue
+        index = max(range(24), key=lambda hour: hours[hour]["design_total_kw"])
+        peak = hours[index]
+        if best is None or peak["design_total_kw"] > best["design_total_kw"]:
+            month = scenario.get("representative_month") or scenario.get("title") or ""
+            best = {"source_room_id": join["id"], "name": join["name"], "member_ids": list(join["member_ids"]),
+                    "calculated_member_ids": [identities.get(str(room.get("room_id"))) for room in rooms],
+                    "design_total_kw": peak["design_total_kw"], "hour": peak["hour"], "display_hour": peak["hour"],
+                    "month": month, "sensible_kw": peak["sensible_kw"], "latent_kw": peak["latent_kw"],
+                    "components": peak["components"], "hourly": _hour_profile(hours),
+                    "own_peak": {"kw": peak["design_total_kw"], "hour": peak["hour"], "month": month,
+                                 "scenario_id": scenario.get("scenario_id", "")}}
+    return best
+
+
+def _hour_profile(hours):
+    """A room's or the house's 24 hours on the design day, as saved: each hour's design total and its load groups
+    (the contractor report's groups). Empty unless all 24 hours carry a numeric design total."""
+    from backend.contractor_report import GROUP_OF, GROUPS
+    if not isinstance(hours, list) or len(hours) != 24:
+        return {}
+    totals, groups = [], []
+    for row in hours:
+        total = row.get("design_total_kw") if isinstance(row, dict) else None
+        if not isinstance(total, (int, float)) or isinstance(total, bool) or not math.isfinite(total):
+            return {}
+        totals.append(round(float(total), 4))
+        grouped = {key: 0.0 for key, *_rest in GROUPS}
+        for name, part in (row.get("components") or {}).items():
+            value = part.get("total_kw") if isinstance(part, dict) else part
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                grouped[GROUP_OF.get(name, "equipment")] += float(value)
+        groups.append({key: round(value, 4) for key, value in grouped.items() if abs(value) > 1e-9})
+    return {"total_kw": totals, "groups": groups}
+
+
+def _own_peak(scenarios, room_id):
+    """The room's own largest design total over every calculated design day (it can fall on another month or hour
+    than the house's)."""
+    best = None
+    for scenario in scenarios:
+        for room in scenario.get("rooms", []) if isinstance(scenario, dict) and isinstance(scenario.get("rooms"), list) else []:
+            peak = room.get("peak") if isinstance(room, dict) and str(room.get("room_id")) == room_id else None
+            value = peak.get("design_total_kw") if isinstance(peak, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and (best is None or value > best["kw"]):
+                best = {"kw": value, "hour": peak.get("display_hour", peak.get("hour")),
+                        "month": scenario.get("representative_month") or scenario.get("title") or "",
+                        "scenario_id": scenario.get("scenario_id", "")}
+    # Without the design day's month or identity the "when" isn't known: nothing to show beyond the room's peak.
+    return best if best and (best["month"] or best["scenario_id"]) else None
+
+
+def _design_day_profile(report):
+    """The whole house's design day (the governing scenario), hour by hour, by load group, from the saved report."""
+    peak = report.get("included_scope_peak") or {}
+    scenarios = report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []
+    scenario = next((row for row in scenarios if isinstance(row, dict) and row.get("scenario_id") == peak.get("scenario_id")), None)
+    if not scenario:
+        return {}
+    profile = _hour_profile(scenario.get("included_scope_hours"))
+    if not profile:
+        return {}
+    # The month's saved hourly totals include the fan heat added after the room sum (as the contractor report's
+    # design day does): the difference is shown as fan heat, so the columns reach the reported totals.
+    seasonal = next((row for row in ((report.get("seasonal") or {}).get("months") or [])
+                     if isinstance(row, dict) and row.get("scenario_id") == scenario.get("scenario_id")), {})
+    totals = seasonal.get("hourly_kw") if isinstance(seasonal.get("hourly_kw"), list) else []
+    if len(totals) == 24 and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in totals):
+        for index, total in enumerate(totals):
+            residual = float(total) - sum(profile["groups"][index].values())
+            if abs(residual) > 1e-9:
+                groups = profile["groups"][index]
+                groups["fan"] = round(groups.get("fan", 0.0) + residual, 4)
+            profile["total_kw"][index] = round(float(total), 4)
+    from backend.contractor_report import GROUPS
+    return {**profile, "scenario_id": scenario.get("scenario_id", ""),
+            "month": scenario.get("representative_month") or scenario.get("title") or "",
+            "peak_hour": peak.get("display_hour", peak.get("hour")),
+            "peak_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
+            "group_labels": [{"key": key, "label": label, "color": color} for key, label, _names, color in GROUPS]}
 
 
 def _response(web, project, response_view="full", check_freshness=None):
@@ -2301,9 +2584,18 @@ def _response(web, project, response_view="full", check_freshness=None):
         check_freshness = response_view != "workspace"
     paths = _paths(project)
     settings = _settings(paths)
-    input_set = _read(paths["current_set"], {})
-    report = _read(paths["report"], {})
-    base_report = _read(paths["base_report"], {})
+    if response_view == "workspace":
+        # The workspace view needs a few small parts of the large saved files (input set ~30 MB, reports ~46 MB on a
+        # house set): those parts are worked out once per saved version of each file (_file_derived).
+        compact = _file_derived(paths["current_set"], {}, "workspace_input", _workspace_input)
+        input_set = compact["input_set"]
+        report = _file_derived(paths["report"], {}, "workspace_report", _workspace_report_parts)
+        base_report = _file_derived(paths["base_report"], {}, "workspace_report", _workspace_report_parts)
+    else:
+        compact = None
+        input_set = _read(paths["current_set"], {})
+        report = _read(paths["report"], {})
+        base_report = _read(paths["base_report"], {})
     stale_reasons = _stale_reasons(paths, input_set) if check_freshness else []
     from backend import equipment_catalogue_service
     equipment_rooms = [r.get("label") for r in _proposal_for_resolution(paths, equipment=False).get("rooms", []) if r.get("label")]
@@ -2312,7 +2604,10 @@ def _response(web, project, response_view="full", check_freshness=None):
     phase1_stale = [reason for reason in stale_reasons if reason not in {
         "internal_gains_resolution", "airflow_resolution", "ahu_resolution", "plant_resolution"}]
     base_report_stale = bool(base_report and (phase1_stale or (
-        base_report.get("phase1_input_fingerprint") != _phase1_input_fingerprint(input_set)
+        base_report.get("phase1_input_fingerprint") != (
+            # Worked out once per saved input set (rebuilding the empty-room set to hash it took about 1 s a call).
+            _file_derived(paths["current_set"], {}, "phase1_input_fingerprint", _phase1_input_fingerprint)
+            if compact is not None else _phase1_input_fingerprint(input_set))
         if base_report.get("phase1_input_fingerprint") else
         base_report.get("preliminary_input_set_fingerprint") != input_set.get("input_fingerprint"))))
     checks = _read(paths["root"] / "phase1_supervisor_job.json", {})
@@ -2329,10 +2624,10 @@ def _response(web, project, response_view="full", check_freshness=None):
                           "manual_placeholder_entities", "codex_handoff_status") if run.get(key) is not None}
         return {
             "id": project["id"], "settings": settings, "run": workspace_run,
-            "hourly_ai_preliminary_load_report": _workspace_report(report),
-            "phase1_base_room_load_report": _workspace_report(base_report),
+            "hourly_ai_preliminary_load_report": report.get("workspace") or _workspace_report({}),
+            "phase1_base_room_load_report": base_report.get("workspace") or _workspace_report({}),
             "phase1_base_room_load_report_stale": base_report_stale,
-            "phase2_room_inputs": _phase2_room_inputs(input_set),
+            "phase2_room_inputs": compact["phase2_room_inputs"],
             "equipment_coverage": equipment_coverage,
             "hourly_ai_preliminary_load_report_stale": bool(stale_reasons or equipment_stale),
             "status": ("stale" if stale_reasons else ("current" if input_set else "not_calculated"))
@@ -2368,6 +2663,66 @@ def _response(web, project, response_view="full", check_freshness=None):
     }
 
 
+_FILE_DERIVED = OrderedDict()
+_FILE_DERIVED_LOCK = threading.Lock()
+_FILE_DERIVED_LIMIT = 24
+
+
+def _file_derived(path, default, name, derive):
+    """derive(contents of the JSON file at path), worked out once per saved version of the file (its size,
+    modification time and inode; saves are atomic replaces); callers get their own copy."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+        key = (str(path.resolve()), name, stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0))
+    except OSError:
+        return derive(deepcopy(default))
+    with _FILE_DERIVED_LOCK:
+        if key in _FILE_DERIVED:
+            _FILE_DERIVED.move_to_end(key)
+            return _unpacked(_FILE_DERIVED[key])
+    value = derive(_read(path, default))
+    with _FILE_DERIVED_LOCK:
+        _FILE_DERIVED[key] = _packed(value)
+        while len(_FILE_DERIVED) > _FILE_DERIVED_LIMIT:
+            _FILE_DERIVED.popitem(last=False)
+    return value
+
+
+def _workspace_report_parts(report):
+    """What the workspace view reads from a saved load report: the compact report and the fields its staleness
+    checks compare. An empty dict when there is no report, as before."""
+    if not isinstance(report, dict) or not report:
+        return {}
+    parts = {key: report.get(key) for key in ("equipment_source_hash", "phase1_input_fingerprint",
+                                              "preliminary_input_set_fingerprint", "supervisor_fingerprint")
+             if key in report}
+    parts["workspace"] = _workspace_report(report)
+    return parts
+
+
+def _workspace_input(input_set):
+    """What the workspace view reads from the saved input set: its fingerprints, the operating-load room inputs, and the parts room_scope_confirmation.candidates reads (rooms, zones, floors, area
+    and scope ledger rows, excluded spaces)."""
+    if not isinstance(input_set, dict) or not input_set:
+        return {"input_set": {}, "phase2_room_inputs": _phase2_room_inputs(input_set)}
+    material = input_set.get("material") if isinstance(input_set.get("material"), dict) else {}
+    model = material.get("hourly_load_model") if isinstance(material.get("hourly_load_model"), dict) else {}
+    room_keys = ("room_id", "name", "zone_id", "area_m2")
+    scoped = {
+        "input_fingerprint": input_set.get("input_fingerprint"),
+        "dependency_fingerprints": input_set.get("dependency_fingerprints", {}),
+        "material": {"hourly_load_model": {
+            "rooms": [{key: room.get(key) for key in room_keys if key in room}
+                      for room in model.get("rooms", []) if isinstance(room, dict)],
+            "zones": model.get("zones", []), "floors": model.get("floors", [])}},
+        "materialized_fields": [row for row in input_set.get("materialized_fields", [])
+                                if isinstance(row, dict) and row.get("field") in {"area_m2", "space_scope"}],
+        "excluded_spaces": input_set.get("excluded_spaces", []),
+    }
+    return {"input_set": scoped, "phase2_room_inputs": _phase2_room_inputs(input_set)}
+
+
 def _phase2_room_inputs(input_set):
     """Compact saved operating-load inputs for room cards; this does not resolve or calculate anything."""
     if not isinstance(input_set, dict):
@@ -2400,8 +2755,32 @@ def _phase2_room_inputs(input_set):
     return list(by_room.values())
 
 
+_REQUEST_MEMO = contextvars.ContextVar("ai_preliminary_request_memo", default=None)
+
+
+@contextmanager
+def one_request():
+    """Within this block (one web request that writes nothing), get() builds each view of the model once; later
+    calls get their own copy. /api/job-plan built the same model twice, once for the job status and once for the
+    plan, at about 2-8 s each on the Turramurra house (2026-11-20)."""
+    if _REQUEST_MEMO.get() is not None:
+        yield
+        return
+    token = _REQUEST_MEMO.set({})
+    try:
+        yield
+    finally:
+        _REQUEST_MEMO.reset(token)
+
+
 def get(web, project, response_view="full", check_freshness=None):
-    return _response(web, project, response_view, check_freshness)
+    memo = _REQUEST_MEMO.get()
+    if memo is None:
+        return _response(web, project, response_view, check_freshness)
+    key = (str(project.get("review_dir") or project.get("id")), response_view, check_freshness)
+    if key not in memo:
+        memo[key] = _packed(_response(web, project, response_view, check_freshness))
+    return _unpacked(memo[key])
 
 
 class RoomScopeNotConfirmed(ValueError):
@@ -2485,8 +2864,10 @@ def _apply_codex_response(web, project):
 
 def _phase1_input_fingerprint(input_set):
     """Envelope-only dependencies; changing equipment cannot stale an empty-room result."""
-    if not input_set.get("material", {}).get("hourly_load_model"):
-        return None
+    return _compute_phase1_input_fingerprint(input_set)
+
+
+def _compute_phase1_input_fingerprint(input_set):
     projected = ai_preliminary._base_room_load_input_set(input_set)
     material = projected["material"]
     return ai_preliminary.content_fingerprint({
@@ -2527,11 +2908,58 @@ def _with_certificate_glazing(paths, proposal, room_use):
     return proposal
 
 
+def _with_certificate_constructions(paths, proposal, room_use):
+    """Use labelled certificate insulation where an operator has not answered."""
+    if (room_use or {}).get("dwelling_context", {}).get("is_dwelling") is not True:
+        return proposal
+    from ai import certificate_constructions
+    certificates = certificate_constructions.read_job(paths["root"])
+    for surface in proposal.get("surfaces", []):
+        if not isinstance(surface, dict) or surface.get("physical_type") not in {"wall", "roof"}:
+            continue
+        if str(surface.get("construction_source") or "").startswith("Answered by the operators"):
+            continue
+        for certificate in certificates:
+            kind = surface["physical_type"]
+            entry = certificate.get(kind if kind == "wall" else "ceiling")
+            if not entry:
+                entry = certificate.get("roof") if kind == "roof" else None
+            if not entry:
+                continue
+            description = entry["construction"]
+            ceiling_r = 0
+            if kind == "roof" and "ceiling" in certificate and entry is certificate["ceiling"]:
+                description = certificate.get("roof_material") or description
+                ceiling_r = entry["insulation_r"]
+                roof_r = (certificate.get("roof") or {}).get("insulation_r", 0)
+                insulation_r = roof_r
+            else:
+                insulation_r = entry["insulation_r"]
+            source = (f"{certificate['certificate']} certificate p{certificate['page']}: {entry['excerpt']}; "
+                      f"{'Roof material ' if kind == 'roof' else ''}{description}")
+            if kind == "roof" and ceiling_r and certificate.get("roof"):
+                source += f"; {certificate['roof']['excerpt']}"
+            try:
+                u_value = certificate_constructions.u_value(kind, description, insulation_r, ceiling_r)
+            except ValueError:
+                continue
+            surface.update(u_value_w_m2k=u_value,
+                           construction_id=f"certificate-{kind}", construction_source=source,
+                           construction_description=description)
+            break
+    return proposal
+
+
 def _assemble_inputs(web, project, source):
     paths = _paths(project)
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
     if not building:
         raise ValueError("Analyse the PDF before assembling an AI preliminary model.")
+    # A job saved before separate same-named rooms were told apart ("Ensuite" in three parts) is migrated first, and
+    # its geometry evidence rebuilt for the new room identities, so the model gets one room per separate room.
+    from backend import reviewer_room_geometry_service
+    if reviewer_room_geometry_service.split_repeated_room_traces(paths["root"]):
+        _rebuild_geometry_evidence(web, project)
     # Use the same current skill findings that feed room-use resolution.
     # Previously assembly kept the base detector's shorter room list, so
     # newly inferred enclosed spaces could be classified but never get into
@@ -2566,6 +2994,7 @@ def _assemble_inputs(web, project, source):
     geometry = _preliminary_geometry(paths)
     proposal = _prepare_preliminary_proposal(paths, proposal, room_use, geometry)
     proposal = _with_certificate_glazing(paths, proposal, room_use)
+    proposal = _with_certificate_constructions(paths, proposal, room_use)
     from backend import need_answers_service
     input_set = ai_preliminary.assemble(
         building, vision, source_fingerprints=_sources(paths), preliminary_proposal=proposal,
@@ -2672,7 +3101,15 @@ def _calculate_load(web, project, scope, persist):
     }
     missing = [label for label, path in required.items() if not path.exists()]
     if missing:
-        raise ValueError("Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing) + ".")
+        details = _read(paths["root"] / "model_input_resolution.json", {}).get("artifact_errors", {})
+        artifact_keys = {"project inputs": "design_requirements", "schedule library": "schedule_library",
+                         "design-day weather": "design_day_scenarios", "hourly load model": "hourly_load_model"}
+        explained = [f"{label}: {details[artifact_keys[label]]}" for label in missing
+                     if details.get(artifact_keys[label])]
+        message = "Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing)
+        if explained:
+            message += ". Validation details: " + "; ".join(explained)
+        raise ValueError(message + ".")
     candidates = []
     if scope == "phase1_base_room":
         candidates = room_scope_confirmation.candidates(input_set, _room_use_artifact(paths))
@@ -2725,6 +3162,13 @@ def _calculate_load(web, project, scope, persist):
             for row in coverage["records"] if row["status"] in {"no_value", "no_room"})
     report["confirmed_rooms"] = confirmed_rooms
     report["room_scope_confirmation"] = confirmation_summary
+    # Each model room's room-list identity: report rooms are named by label, which another level can share.
+    report["room_identities"] = {str(room["room_id"]): str(room["source_room_id"])
+                                 for room in ((confirmed_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
+                                 if isinstance(room, dict) and room.get("room_id") and room.get("source_room_id")}
+    from backend import room_join_service
+    report["room_joins"] = [{key: row[key] for key in ("id", "name", "level", "member_ids", "primary_id")}
+                            for row in room_join_service.read(paths["root"])]
     if scope == "phase1_base_room":
         report["phase1_input_fingerprint"] = _phase1_input_fingerprint(input_set)
         _phase1_coverage(report, candidates, confirmed_set)
@@ -2756,6 +3200,7 @@ def _calculate_load(web, project, scope, persist):
         from backend.thermal_audit_service import build_elements
         _write(paths["thermal_audit_elements"], build_elements(report))
     _slim_report(report)
+    report["room_peaks"] = _room_peaks(report)
     if persist:
         _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
     return report
@@ -2857,16 +3302,81 @@ def _house_context(paths, room_use, trace_records):
     from ai import house_envelope
     ranks = [rank for rank in (house_envelope.level_rank(row.get("level_name")) for row in trace_records) if rank is not None]
     levels = _house_floor_bases(paths, trace_records, rooms)
+    # Every level the drawings name a room on (traced or not), highest first: what is over a room follows from it.
+    level_names = {}
+    for row in [*trace_records, *((room_use or {}).get("records") or [])]:
+        if not isinstance(row, dict):
+            continue
+        rank = house_envelope.level_rank(row.get("level_name"))
+        if rank is not None:
+            level_names.setdefault(rank, str(row.get("level_name")))
     return {"rooms": rooms, "floors": levels.get("floors", {}), "roofs": levels.get("roofs", {}),
+            "levels": level_names, "roof_plan_pages": _roof_plan_pages(paths),
             **({"lowest_rank": min(ranks)} if ranks else {})}
 
 
-def _house_floor_bases(paths, records, rooms):
-    """{trace_id: {"kind": "ground" | "split" | "assumed_cooled", "reason", "parts" (split: what lies under it)}}.
+def _roof_plan_pages(paths):
+    """Pages the page reading calls a roof plan: cited for the top level's roof."""
+    pages = []
+    for number, page in (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {}).items():
+        if (isinstance(page, dict) and str(number).isdigit()
+                and re.search(r"\broof\s+plan\b", f"{page.get('title', '')} {page.get('level', '')}", re.I)):
+            pages.append(int(number))
+    return sorted(pages)
 
-    The lowest traced level sits on the ground. An upper room's plan is matched to the level below by the stairs or
-    lift traced on both, else by dimension text the two plans share; its floor is then split by the rooms under it.
-    With one level known (or none), the project-wide floor basis stays as it is.
+
+# The component of the labelled assumption a house room gets when what is over it couldn't be worked out from the plans
+# (phase1_supervisor_service turns it into a gap to check).
+HOUSE_ROOF_NOT_LINED_UP = "roof — not lined up with the plan above"
+
+
+def _house_level_roof(house, room, area_only=False, why=""):
+    """What is over a house room when its plan couldn't be stacked under the level above (or it has no outline), from
+    the level order alone; None when the room's level isn't named. In the shape _house_roof_surfaces takes.
+
+    User rule (2026-11-18, Turramurra): in a house the top storey is under the roof, a lower storey under the
+    air-conditioned storey above it, and a basement under the ground floor; a house is never asked what is "above the
+    tenancy". A part of a lower room with the roof directly over it (a single-storey wing) is found only by matching
+    the plans (_house_floor_bases), so until then it is named in the labelled assumption."""
+    from ai import house_envelope
+    levels = (house or {}).get("levels") or {}
+    rank = house_envelope.level_rank(room.get("level_name"))
+    if rank is None or not levels:
+        return None
+    level = room.get("level_name") or "This level"
+    roof_pages = (house or {}).get("roof_plan_pages") or []
+    roof_ref = f" (roof plan, p. {', '.join(map(str, roof_pages))})" if roof_pages else ""
+    higher = sorted(value for value in levels if value > rank)
+    if not higher:
+        reason = (f"{level} is the house's top level: the roof is over it{roof_ref}." if len(levels) > 1 else
+                  f"{level} is the house's only level: the roof is over it{roof_ref}.")
+        return {"parts": [{"below": "open", "fraction": 1.0, "rooms": []}], "method": "", "reason": reason,
+                "level_rule": "top_level"}
+    above = levels[higher[0]]
+    why = why or (f"{room.get('label') or 'This room'} was found by its area only (no outline), so it can't be laid over the "
+           f"{above} plan" if area_only else
+           f"this plan couldn't be lined up with the {above} plan (no stair or lift traced on both, and too few dimension "
+           "figures or grid letters printed at the same places on both sheets)")
+    roof_plan = f" (roof plan p. {', '.join(map(str, roof_pages))})" if roof_pages else ""
+    reason = (f"Under the {above} (the house's next level up) — {why}. Whether part of it is single-storey with the "
+              f"roof directly over it{roof_plan} isn't known, so it is taken as under the {above}'s air-conditioned "
+              f"rooms, at the same temperature, so no heat flows (labelled assumption: a lower storey sits under the "
+              f"storey above).")
+    return {"parts": [{"below": "cooled", "fraction": 1.0, "rooms": [f"the {above}"], "reason": reason}],
+            "method": "", "level_above": above, "level_rule": "under_level_above"}
+
+
+def _house_floor_bases(paths, records, rooms):
+    """{"floors": {trace_id: {"kind": "ground" | "split" | "assumed_cooled", "reason", "parts"}},
+        "roofs": {trace_id: {"parts", "method", "level_above", "reason"}}}.
+
+    The lowest traced level sits on the ground. Each level's plan is lined up with the level below by the stairs or
+    lift traced on both, else by the dimension text and grid letters the two sheets print at the same places
+    (house_envelope.plan_text_registration). An upper room's floor is then split by the rooms under it, and a lower
+    room's top by what of the level above is over it: its rooms, a balcony or void, its untraced floor (stair, hall),
+    or nothing of it at all, where the roof is directly over the room (user decision 2026-11-18: the roof plan's
+    single-storey parts get a roof). A room whose plan can't be lined up gets no entry and keeps the labelled
+    level-order assumption (_house_level_roof).
     """
     from ai import house_envelope
     traced = []
@@ -2880,11 +3390,38 @@ def _house_floor_bases(paths, records, rooms):
         traced.append({"trace_id": row.get("trace_id"), "page": row.get("page"), "rank": rank, "mm_per_px": mm_per_px,
                        "level": row.get("level_name", ""), "label": use.get("label") or row.get("room_label", ""),
                        "category": use.get("category", ""), "scope": use.get("scope", ""),
+                       "points_px": [[float(x), float(y)] for x, y in points],
                        "points_mm": [[x * mm_per_px, y * mm_per_px] for x, y in points]})
     ranks = sorted({row["rank"] for row in traced})
     if len(ranks) < 2:
         return {}
-    offsets, result = {}, {}
+    registrations = {}
+
+    def level_rows(rank):
+        """A level's traced rooms on its main plan sheet (the page holding most of them)."""
+        rows = [row for row in traced if row["rank"] == rank]
+        pages = [row["page"] for row in rows]
+        main = max(set(pages), key=pages.count) if pages else None
+        return [row for row in rows if row["page"] == main]
+
+    def registration(upper_rank, lower_rank):
+        """{"move": f(upper row) -> its points in the lower plan's mm frame, "evidence"} or None."""
+        key = (upper_rank, lower_rank)
+        if key not in registrations:
+            upper, lower = level_rows(upper_rank), level_rows(lower_rank)
+            registrations[key] = None
+            if upper and lower and upper[0]["page"] != lower[0]["page"]:
+                stacked = house_envelope.stacked_offset(upper, lower)
+                if stacked:
+                    dx, dy, evidence = stacked
+                    registrations[key] = {"move": lambda row, dx=dx, dy=dy: [[x + dx, y + dy] for x, y in row["points_mm"]],
+                                          "evidence": evidence}
+                else:
+                    registrations[key] = _plan_text_registration(paths, upper[0]["page"], lower[0]["page"],
+                                                                 lower[0]["mm_per_px"])
+        return registrations[key]
+
+    result = {}
     for room in traced:
         if room["rank"] == ranks[0]:
             result[room["trace_id"]] = {"kind": "ground", "reason": (
@@ -2892,81 +3429,161 @@ def _house_floor_bases(paths, records, rooms):
                 "slab on the ground adds no cooling load (Phase 1 rule, 2026-10-15).")}
             continue
         below = max(rank for rank in ranks if rank < room["rank"])
-        lower = [row for row in traced if row["rank"] == below]
-        key = (room["rank"], below)
-        if key not in offsets:
-            upper = [row for row in traced if row["rank"] == room["rank"]]
-            offsets[key] = (house_envelope.stacked_offset(upper, lower)
-                            or _plan_text_offset(paths, upper, lower))
-        offset = offsets[key]
+        lower = level_rows(below)
         level_below = lower[0]["level"] if lower else "the level below"
-        if not offset:
+        match = registration(room["rank"], below) if room["page"] == (level_rows(room["rank"]) or [{}])[0].get("page") else None
+        if not match:
             result[room["trace_id"]] = {"kind": "assumed_cooled", "reason": (
                 f"This plan couldn't be matched to the {level_below} plan (no stair or lift traced on both, and no "
                 "dimension text the two share): taken as over air-conditioned rooms, the most likely case for a house "
                 "(labelled assumption).")}
             continue
-        dx, dy, evidence = offset
-        moved = [[x + dx, y + dy] for x, y in room["points_mm"]]
-        result[room["trace_id"]] = {"kind": "split", "level_below": level_below, "method": evidence,
-                                    "parts": house_envelope.floor_split(moved, lower)}
-    # What is over each room: the top level has the roof; a lower room is under the rooms of the level above where they
-    # overlap it (moved onto its plan by the same match) and under the roof elsewhere.
-    roofs = {}
+        result[room["trace_id"]] = {"kind": "split", "level_below": level_below, "method": match["evidence"],
+                                    "parts": house_envelope.floor_split(match["move"](room), lower)}
+    # What is over each room: the top level has the roof; a lower room is under the level above where that level's
+    # floor (its traced rooms, the gaps between them closed) is over it, and under the roof elsewhere.
+    roofs, coverages = {}, {}
+    roof_note = _roof_plan_note(paths)
     for room in traced:
         if room["rank"] == ranks[-1]:
             roofs[room["trace_id"]] = {"parts": [{"below": "open", "fraction": 1.0, "rooms": []}], "method": "",
-                                       "reason": f"{room['level'] or 'The top level'} is the house's top level: the roof is over it."}
+                                       "reason": f"{room['level'] or 'The top level'} is the house's top level: the roof is over it."
+                                                 + (f" {roof_note}" if roof_note else "")}
             continue
         above = min(rank for rank in ranks if rank > room["rank"])
-        offset = offsets.get((above, room["rank"]))
-        if (above, room["rank"]) not in offsets:
-            upper = [row for row in traced if row["rank"] == above]
-            this_level = [row for row in traced if row["rank"] == room["rank"]]
-            offset = offsets[(above, room["rank"])] = (house_envelope.stacked_offset(upper, this_level)
-                                                       or _plan_text_offset(paths, upper, this_level))
-        if not offset:
-            continue                       # can't tell what's over it: the room keeps the general roof rule
-        dx, dy, evidence = offset
-        upper = [{**row, "points_mm": [[x + dx, y + dy] for x, y in row["points_mm"]]} for row in traced if row["rank"] == above]
-        roofs[room["trace_id"]] = {"parts": house_envelope.floor_split(room["points_mm"], upper), "method": evidence,
-                                   "level_above": upper[0]["level"] if upper else ""}
+        own_sheet = (level_rows(room["rank"]) or [{}])[0].get("page")
+        if room["page"] != own_sheet:
+            roofs[room["trace_id"]] = {"unmatched": (
+                f"its outline was traced on plan page {room['page']}, not on the {room['level'] or 'its level'}'s plan "
+                f"(page {own_sheet}), so it can't be laid over the plan above")}
+            continue
+        match = registration(above, room["rank"])
+        if not match:
+            continue                       # can't tell what's over it: the labelled level-order assumption applies
+        upper = [{**row, "points_mm": match["move"](row)} for row in level_rows(above)]
+        level_above = upper[0]["level"] if upper else ""
+        footprint = house_envelope.upper_footprint(upper)
+        if footprint is None:
+            continue
+        coverage = coverages.setdefault(above, _level_coverage(paths, level_above, footprint.area / 1e6))
+        if coverage:
+            roofs[room["trace_id"]] = {"unmatched": coverage}
+            continue
+        roofs[room["trace_id"]] = {"parts": _above_parts(house_envelope.above_split(room["points_mm"], upper, footprint),
+                                                         level_above, match["evidence"], roof_note),
+                                   "method": match["evidence"], "level_above": level_above}
     return {"floors": result, "roofs": roofs}
 
 
-def _plan_text_offset(paths, upper, lower):
-    """(dx_mm, dy_mm, evidence) moving the upper plan onto the lower one by dimension text both sheets print at the same
-    places (the seating step's plan registration), when both are at the same scale; else None."""
-    from ai.room_use_resolution import plan_text_translation
-    from backend import seating_service
-    if not upper or not lower:
-        return None
+# The level above's traced rooms must cover this share of its floor before the floor outside them is taken as roof.
+MIN_UPPER_COVERAGE = 0.8
+
+
+def _level_floor_area(paths, level_name):
+    """(m², where from) for a level's whole floor: the floor area the drawings print for it ("First floor area 177.76
+    m²", read by the page reading), else the sum of its rooms' areas; (None, "") when neither is known."""
+    level = " ".join(str(level_name or "").casefold().split())
+    if level:
+        pattern = re.compile(re.escape(level).replace(r"\ ", r"\s+") + r"\s+(?:area|gfa)\s*[:=]?\s*([\d,]+(?:\.\d+)?)\s*m", re.I)
+        pages = _read(paths["root"] / "page_inventory.json", {}).get("pages") or {}
+        for number, page in sorted(pages.items(), key=lambda item: int(item[0]) if str(item[0]).isdigit() else 0):
+            for row in (page or {}).get("information") or [] if isinstance(page, dict) else []:
+                found = pattern.search(str((row or {}).get("what") or "")) if isinstance(row, dict) else None
+                if found:
+                    return float(found.group(1).replace(",", "")), f"printed on p. {number}"
+    try:
+        from backend import reviewer_room_geometry_service
+        areas = reviewer_room_geometry_service.current_traced_areas(paths["root"]).values()
+    except (OSError, ValueError, TypeError, KeyError):
+        return None, ""
+    total = sum(float(row["area_m2"]) for row in areas if isinstance(row.get("area_m2"), (int, float))
+                and " ".join(str(row.get("level_name") or "").casefold().split()) == level)
+    return (total, "the sum of its rooms' areas") if total else (None, "")
+
+
+def _level_coverage(paths, level_name, footprint_m2):
+    """"" when the level's traced rooms cover enough of its floor to tell where the roof is over the level below;
+    otherwise why not (said in the labelled assumption and the Phase 1 gap)."""
+    floor_m2, where = _level_floor_area(paths, level_name)
+    if not floor_m2 or footprint_m2 >= MIN_UPPER_COVERAGE * floor_m2:
+        return ""
+    return (f"the {level_name} plan's traced rooms cover only {footprint_m2:.0f} m² of its {floor_m2:.0f} m² floor "
+            f"({where}), so where that floor ends and the roof is directly over this room isn't known")
+
+
+def _above_parts(split, level_above, evidence, roof_note):
+    """house_envelope.above_split rows in the shape _house_roof_surfaces takes, each with its cited reason."""
+    method = f" Lined up with the {level_above} plan by {evidence}." if evidence else ""
+    roof_cite = f" {roof_note}" if roof_note else ""
+    parts = []
+    for row in split:
+        names = ", ".join(row["rooms"])
+        over = row["over"]
+        if over == "roof":
+            parts.append({"below": "open", "fraction": row["fraction"], "rooms": [], "reason": (
+                f"No part of the {level_above} is over this part of the room (a single-storey part): the roof is "
+                f"directly over it.{method}{roof_cite}")})
+        elif over == "outdoor":
+            parts.append({"below": "outdoor", "fraction": row["fraction"], "rooms": row["rooms"], "reason": (
+                f"Under {names} (outdoors, a balcony or deck above): the slab over it is exposed like a roof.{method}{roof_cite}")})
+        elif over == "void":
+            parts.append({"below": "open", "key": "void", "fraction": row["fraction"], "rooms": row["rooms"], "reason": (
+                f"Under the {names} of the {level_above}: the room is open to the roof over that void, so the roof "
+                f"counts as this part's top.{method}")})
+        elif over == "upper_untraced":
+            parts.append({"below": "cooled", "key": "untraced", "fraction": row["fraction"], "rooms": [f"the {level_above}"], "reason": (
+                f"Under the {level_above}'s floor where no room of it is traced (a stair, hall or landing inside its "
+                f"outline): taken as part of the air-conditioned storey, so no heat flows (labelled assumption).{method}")})
+        else:
+            parts.append({"below": over, "fraction": row["fraction"], "rooms": row["rooms"]})
+    return parts
+
+
+def _roof_plan_note(paths):
+    """A citation of the roof plan's own notes ("concrete roof below; balcony below"), or ""."""
+    pages = _roof_plan_pages(paths)
+    if not pages:
+        return ""
+    inventory = (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {}).get(str(pages[0])) or {}
+    what = next((str(row.get("what") or "") for row in inventory.get("information") or []
+                 if isinstance(row, dict) and row.get("kind") == "room_geometry"), "")
+    return f"Roof plan p. {pages[0]}" + (f": “{what[:220]}”." if what else ".")
+
+
+def _plan_text_registration(paths, upper_page, lower_page, lower_mm_per_px):
+    """{"move", "evidence"} lining the upper sheet up with the lower one by the dimension numbers and grid letters both
+    print at the same places (house_envelope.plan_text_registration), worked in sheet points so each plan's own scale
+    calibration doesn't matter; else None."""
+    from ai import house_envelope
     source = _read(paths["root"] / "ai_input.json", {}).get("source_pdf")
     systems = {page.get("page"): page.get("coordinate_systems", {}).get("image_px", {})
                for page in _read(paths["root"] / "vector_geometry.json", {}).get("geometry_key_points", {}).get("pages", [])}
-    top_page, bottom_page = upper[0]["page"], lower[0]["page"]
-    if not source or not Path(source).exists() or top_page == bottom_page:
+    if not source or not Path(source).exists() or upper_page == lower_page:
         return None
-    import pdfplumber
-    version = seating_service._pdf_version(source)
-    with pdfplumber.open(source) as doc:
-        if not (0 < top_page <= len(doc.pages) and 0 < bottom_page <= len(doc.pages)):
-            return None
-        top, bottom = seating_service._Page(doc, top_page, version), seating_service._Page(doc, bottom_page, version)
-        registration = plan_text_translation(seating_service._words(top), seating_service._words(bottom))
-        widths = (top.width, bottom.width)
-    if not registration:
+    from backend import pdf_page_text_cache
+    top = pdf_page_text_cache.page_words(paths["root"], source, upper_page)
+    bottom = pdf_page_text_cache.page_words(paths["root"], source, lower_page)
+    if top is None or bottom is None:
         return None
-    scales = []
-    for rows, page, width in ((upper, top_page, widths[0]), (lower, bottom_page, widths[1])):
+    fit = house_envelope.plan_text_registration(top[0], bottom[0])
+    widths = (top[1], bottom[1])
+    if not fit:
+        return None
+    px_per_pt = []
+    for page, width in ((upper_page, widths[0]), (lower_page, widths[1])):
         image_width = (systems.get(page) or {}).get("image_width")
         if not image_width or not width:
             return None
-        scales.append(rows[0]["mm_per_px"] * image_width / width)      # mm per PDF point on that sheet
-    if abs(scales[0] - scales[1]) > 0.02 * scales[1]:
-        return None
-    return (registration["dx_pt"] * scales[1], registration["dy_pt"] * scales[1],
-            f"dimension text printed on both plans ({', '.join(registration['anchors'][:4])})")
+        px_per_pt.append(float(image_width) / float(width))
+    upper_scale, lower_scale = px_per_pt
+    dx, dy = fit["dx_pt"], fit["dy_pt"]
+
+    def move(row):
+        return [[(x / upper_scale + dx) * lower_scale * lower_mm_per_px, (y / upper_scale + dy) * lower_scale * lower_mm_per_px]
+                for x, y in row["points_px"]]
+    anchors = ", ".join(fit["anchors"][:6])
+    return {"move": move, "evidence": (f"the dimension figures and grid letters printed at the same places on both sheets "
+                                       f"({fit['votes']} matches, e.g. {anchors})")}
 
 
 def _house_roof_surfaces(room, part, area, basis, citation, reviewer):
@@ -2982,21 +3599,24 @@ def _house_roof_surfaces(room, part, area, basis, citation, reviewer):
                   "reviewer_trace_id": part.get("trace_id", ""), "reviewer": reviewer, "verification_status": "provisional",
                   "gross_area_m2": share_area}
         if share["below"] in {"open", "outdoor"}:
-            reason = basis.get("reason") or (f"Under {names} (outdoors): the slab over it is exposed like a roof." if share["below"] == "outdoor"
+            reason = share.get("reason") or basis.get("reason") or (f"Under {names} (outdoors): the slab over it is exposed like a roof." if share["below"] == "outdoor"
                                              else "No room of the level above is over this part: the roof is over it.")
-            surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:roof" + ("" if share["fraction"] >= 1 else f":{share['below']}"),
+            reason = reason if share.get("reason") else reason + method
+            surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:roof" + ("" if share["fraction"] >= 1 else f":{share.get('key') or share['below']}"),
                              "label": f"{room.get('label', 'Room')} roof" + (f" (under {names})" if names else ""),
                              "physical_type": "roof", "thermal_role": "external", "external_exposure": "external",
-                             "orientation": "horizontal", "rationale": reason + method,
-                             "assumptions": ["flat_roof_over_traced_footprint"], "phase1_assumption": reason + method})
+                             "orientation": "horizontal", "rationale": reason,
+                             "assumptions": ["flat_roof_over_traced_footprint"], "phase1_assumption": reason})
         elif share["below"] == "cooled":
-            reason = f"Under {names}, air-conditioned to the same temperature: no heat flows.{method}"
-            surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:ceiling",
+            reason = share.get("reason") or f"Under {names}, air-conditioned to the same temperature: no heat flows.{method}"
+            notes = ({"phase1_assumptions": [{"component": HOUSE_ROOF_NOT_LINED_UP, "reason": reason}]}
+                     if basis.get("level_rule") == "under_level_above" else {"phase1_assumption": reason})
+            surfaces.append({**notes, **common, "surface_key": f"reviewer-trace:{part['trace_id']}:ceiling" + (f":{share['key']}" if share.get("key") else ""),
                              "label": f"{room.get('label', 'Room')} ceiling (under {names})",
                              "physical_type": "ceiling", "thermal_role": "conditioned_adjacent", "external_exposure": "",
                              "boundary_condition": "floor_above", "orientation": "",
                              "boundary_source": "A floor or other conditioned space above, at the room's temperature: no heat flows.",
-                             "rationale": reason, "phase1_assumption": reason})
+                             "rationale": reason})
         else:
             reason = (f"Under {names} (not air-conditioned in a house): the buffer-space estimate (outdoor temperature "
                       f"minus 3 K) applies.{method}")

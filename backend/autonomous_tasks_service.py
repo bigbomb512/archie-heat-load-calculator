@@ -9,8 +9,11 @@ import math
 import traceback
 import re
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from collections import OrderedDict
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import quote
@@ -42,6 +45,85 @@ def _write(path, value):
 
 def _root(project):
     return Path(project["review_dir"])
+
+
+def _files_signature(root, names):
+    """Modification time, change time, size and inode of each named job file (None when missing): any save changes it."""
+    signature = []
+    for name in names:
+        try:
+            stat = (Path(root) / name).stat()
+            signature.append((stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+        except OSError:
+            signature.append(None)
+    return tuple(signature)
+
+
+_FILE_MEMO = OrderedDict()
+_FILE_MEMO_LOCK = threading.Lock()
+_FILE_MEMO_SIZE = 64
+
+
+def _memo_by_files(name, root, files, compute, *args):
+    """compute() worked out once while the named job files are unchanged; callers always get their own copy.
+
+    A round of drawing questions asks for the same plan choice, plan levels and printed dimensions hundreds of times,
+    each re-reading the job's large JSON files (Turramurra 2026-11-18: about 165 s of a replayed run on the plan choice)."""
+    key = (name, str(Path(root).resolve()), args, _files_signature(root, files))
+    with _FILE_MEMO_LOCK:
+        if key in _FILE_MEMO:
+            _FILE_MEMO.move_to_end(key)
+            return deepcopy(_FILE_MEMO[key])
+    value = compute()
+    with _FILE_MEMO_LOCK:
+        _FILE_MEMO[key] = value
+        _FILE_MEMO.move_to_end(key)
+        while len(_FILE_MEMO) > _FILE_MEMO_SIZE:
+            _FILE_MEMO.popitem(last=False)
+    return deepcopy(value)
+
+
+# Rebuilding the calculation evidence takes about half a minute on a house set. During a run of drawing questions it is
+# deferred (drawing_tasks_service.answer_all): an applied answer marks it stale, and it is rebuilt only when a question
+# needs its traced areas (the room-size step) and once when the run ends, not after every round.
+_DEFERRED_EVIDENCE = ContextVar("archie_deferred_drawing_evidence", default=None)
+
+
+@contextmanager
+def deferred_evidence_rebuild(build):
+    """Within the block, evidence_changed() marks the evidence stale instead of rebuilding it; build() rebuilds it."""
+    state = {"stale": False, "build": build, "builds": 0}
+    token = _DEFERRED_EVIDENCE.set(state)
+    try:
+        yield state
+    finally:
+        _DEFERRED_EVIDENCE.reset(token)
+
+
+def evidence_changed(web, project):
+    """Saved drawing results changed the calculation evidence's inputs: rebuild it now, or mark it stale while deferred."""
+    state = _DEFERRED_EVIDENCE.get()
+    if state is not None:
+        state["stale"] = True
+        return
+    if web is not None:
+        from backend.phase1_supervisor_service import _build_calculation_evidence
+        _build_calculation_evidence(web, project)
+
+
+def ensure_evidence_current():
+    """Rebuild deferred, stale evidence before something reads it."""
+    state = _DEFERRED_EVIDENCE.get()
+    if state is not None and state["stale"]:
+        state["stale"] = False
+        state["builds"] += 1
+        state["build"]()
+
+
+def _current_traced_areas(root):
+    """The traced rooms' areas, from the calculation evidence's geometry proofs (rebuilt first when stale)."""
+    ensure_evidence_current()
+    return reviewer_room_geometry_service.current_traced_areas(root)
 
 
 def _task_dir(root, task, target):
@@ -107,30 +189,19 @@ def _status_for_accuracy(source, accuracy):
 
 def _site_packet(root):
     ai_input, spatial, building = _load_inputs(root)
-    packet, prompt = autonomous_tasks.build_site_packet(ai_input, spatial, building)
+    page_inventory = _read(root / "page_inventory.json", {})
+    packet, prompt = autonomous_tasks.build_site_packet(ai_input, spatial, building, page_inventory)
     return packet, prompt, {"ai_input": ai_input, "spatial_ocr": spatial, "building_evidence": building}
 
 
 def _survey_axis(root):
     """The drawing set's orientation from its boundary bearings (ai/survey_bearings.py), read once per PDF and kept in
     the job; None when the set has no agreeing bearings or the PDF can't be read."""
-    from ai import survey_bearings
+    from backend import survey_axis_service     # kept there so page preparation can read it ahead of the checks
     pdf = Path(str((_read(root / "ai_input.json", {}) or {}).get("source_pdf") or ""))
     if not pdf.is_file():
         return None
-    stat = pdf.stat()
-    key = f"{survey_bearings.METHOD_ID}:{stat.st_size}:{stat.st_mtime_ns}"
-    cached = _read(root / "survey_bearings.json", {})
-    if isinstance(cached, dict) and cached.get("key") == key:
-        return cached.get("axis")
-    try:
-        rows = survey_bearings.labels(pdf)
-    except Exception as error:      # any PDF library failure: north comes from the arrows alone
-        print(f"Couldn't read the survey bearings: {type(error).__name__}: {error}", flush=True)
-        rows = []
-    result = survey_bearings.axis(rows)
-    _write(root / "survey_bearings.json", {"key": key, "method_id": survey_bearings.METHOD_ID, "axis": result, "labels": rows[:200]})
-    return result
+    return survey_axis_service.axis_for_pdf(root, pdf)
 
 
 def _site_declination(root):
@@ -222,8 +293,17 @@ def _north_packets(root):
 NOT_PLAN_PAGE_TYPES = {"elevation", "section", "detail"}
 
 
+_PAGE_SELECTION_FILES = ("ai_input.json", "spatial_ocr.json", "building_evidence.json", "drawing_coverage.json",
+                         "vector_geometry.json", "page_inventory.json")
+
+
 def _p0_page_selection(root):
-    """Select one main geometry sheet per level and explain every omitted plan page."""
+    """Select one main geometry sheet per level and explain every omitted plan page (worked out once per version of
+    the files it reads)."""
+    return _memo_by_files("p0_page_selection", root, _PAGE_SELECTION_FILES, lambda: _compute_p0_page_selection(root))
+
+
+def _compute_p0_page_selection(root):
     ai_input, spatial, _building = _load_inputs(root)
     coverage = _read(root / "drawing_coverage.json", {})
     vector = _read(root / "vector_geometry.json", {})
@@ -402,6 +482,10 @@ def _p0_calibration_ready(root, page, context):
         sheet = _sheet_scale_calibration(root, page, context, reason)
         if sheet:
             return sheet, ""
+    if not context.get("declared_mm_per_px") and _p0_dimensions_settled(root, page):
+        sibling = _registered_sibling_scale(root, page, context, reason)
+        if sibling:
+            return sibling, ""
     if _p0_dimensions_settled(root, page) and _scale_read_settled(root, page):
         scale_record = _current_task(root, "P0_scale_read", f"page-{page}")
         scale = (scale_record or {}).get("applied_value") or {}
@@ -416,6 +500,57 @@ def _p0_calibration_ready(root, page, context):
         if _settled_step(root, "P0_scale_objects", page):
             return _assumed_scale_calibration(context, reason), ""
     return None, reason
+
+
+def _registered_sibling_scale(root, page, context, reason=""):
+    """A plan sheet that prints no scale takes the printed scale of another plan of the set that prints the same
+    dimension figures and grid letters at the same places (house_envelope.plan_text_registration): the two are drawn
+    at one scale on one sheet layout. Turramurra's first-floor plan (2026-11-18) prints no scale; its rooms were scaled
+    from a door and a WC measured by eye (11.67 mm/px) although its grid A-G spans the same 599 pt as the 1:100
+    basement and ground plans (14.11 mm/px), so its areas came out about a third too small. None when no such sheet."""
+    for plan in _p0_main_geometry_pages(root):
+        other = plan.get("page")
+        if other == page:
+            continue
+        try:
+            other_context = _p0_context(root, other)
+        except PACKET_ERRORS:
+            continue
+        declared = other_context.get("declared_mm_per_px")
+        if not declared or not _sheets_registered(root, page, other):
+            continue
+        ratio = float(other_context.get("image_scale") or 1) / float(context.get("image_scale") or 1)
+        scale_text = next((str(row.get("text") or "") for row in other_context.get("declared_scale_candidates") or []
+                           if isinstance(row, dict) and row.get("text")), "")
+        return {"source": "registered_sheet_scale", "status": "declared_scale_only", "mm_per_px": float(declared) * ratio,
+                "scale_text": scale_text, "scale_page": other,
+                "label": (f"This sheet prints no scale; scaled from the printed scale {scale_text} of plan page {other}, "
+                          "which prints the same dimension figures and grid letters at the same places (labelled "
+                          "assumption: one scale for both sheets). No printed dimension could be read to check it.")
+                .replace("scale  of", "scale of"), "reason": reason[:300]}
+    return None
+
+
+def _sheets_registered(root, page, other):
+    ai_input, _spatial, _building = _load_inputs(root)
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        return False
+    stat = source.stat()
+    return _cached_sheets_registered(str(source), stat.st_mtime_ns, stat.st_size, int(page), int(other))
+
+
+@lru_cache(maxsize=64)
+def _cached_sheets_registered(source, _mtime_ns, _size, page, other):
+    import pdfplumber
+    from ai import house_envelope
+    from backend import seating_service
+    version = seating_service._pdf_version(source)
+    with pdfplumber.open(source) as doc:
+        if not (0 < page <= len(doc.pages) and 0 < other <= len(doc.pages)):
+            return False
+        words = [seating_service._words(seating_service._Page(doc, number, version)) for number in (page, other)]
+    return house_envelope.plan_text_registration(*words) is not None
 
 
 def _settled_step(root, task, page):
@@ -579,7 +714,9 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     active = page_analysis_cache._ACTIVE.get()
     generation = active.generation if active else page_analysis_cache.PageAnalysisCache(
         root, _page_analysis_code_fingerprint()).generation
-    key = (generation, int(page_number), bool(raster_mode), tuple(sorted(wall_style_ids or [])), round(float(mm_per_px), 6))
+    names, labels = _p0_plan_names(root, page_number), _p0_label_points(root, page_number, context)
+    key = (generation, int(page_number), bool(raster_mode), tuple(sorted(wall_style_ids or [])), round(float(mm_per_px), 6),
+           tuple(sorted(names)), tuple((name, round(x, 1), round(y, 1)) for name, (x, y) in labels))
     cached = _WALLS_AREAS_CACHE.get(key)
     if cached is not None:
         _WALLS_AREAS_CACHE.move_to_end(key)
@@ -587,8 +724,32 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     if raster_mode:
         walls = room_outline.raster_wall_geometry(context["image"], context["viewport"], mm_per_px)
     else:
-        walls = room_outline.wall_geometry(context["objects"], wall_style_ids or [], context["viewport"])
+        # The chosen wall pens, plus walls found by their shape (two parallel faces a wall's thickness apart): a pen
+        # choice alone misses walls drawn in a shared pen (the Turramurra house, 2026-11-20).
+        walls = room_outline.wall_geometry(context["objects"], wall_style_ids or [], context["viewport"], mm_per_px=mm_per_px)
     areas = room_outline.enclosed_rooms(walls, context["viewport"], mm_per_px)
+    if not raster_mode and len(areas) < len(names):
+        # The chosen wall pens enclose fewer areas than the plan has rooms: walls found by their shape (two parallel
+        # faces a wall's thickness apart) are added. On the Turramurra house (2026-11-20) the chosen pen was the floor
+        # fill and its walls share a pen with the dimension lines, so no pen choice could enclose a room. Only then:
+        # where the pens already work (Butcher Buffet) booth backs and table edges would read as walls too.
+        paired = room_outline.paired_wall_geometry(context["objects"], context["viewport"], mm_per_px)
+        if paired is not None and not paired.is_empty:
+            from shapely.ops import unary_union
+            trial_walls = unary_union([geometry for geometry in (walls, paired) if geometry is not None])
+            trial = room_outline.enclosed_rooms(trial_walls, context["viewport"], mm_per_px)
+            if len(trial) > len(areas):
+                walls, areas = trial_walls, trial
+    from backend import house_windows_service
+    if house_windows_service.is_dwelling(root):
+        # A printed room name in floor no area holds (a kitchen open to the alfresco through bifold doors, its aisle
+        # closed as if it were a doorway) gets that floor within the building's footprint, instead of falling to the
+        # AI's corner sketch (Turramurra ground floor, 2026-11-21). Not a shop: its open floor is the shop itself.
+        areas = sorted([*areas, *room_outline.unenclosed_named_floor(walls, areas, labels, context["viewport"], mm_per_px)],
+                       key=lambda polygon: -polygon.area)
+        # A house's open-plan living is divided at its printed room names. Not a shop: its buffet stations and
+        # servery belong to the dining or shop area they face, whatever is printed in them.
+        areas = _split_open_plan_areas(areas, labels, context, walls, mm_per_px, raster_mode)
     if raster_mode:
         from shapely.geometry import LineString
         geometries = list(walls.geoms) if walls is not None and hasattr(walls, "geoms") else ([walls] if walls is not None else [])
@@ -604,12 +765,87 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     else:
         objects = context["objects"]
         selected_styles = wall_style_ids or []
-        segments = room_outline.drawn_segments(objects, selected_styles)
+        segments = room_outline.drawn_segments(objects, selected_styles) + room_outline.wall_face_segments(walls, mm_per_px)
     result = walls, areas, segments
     _WALLS_AREAS_CACHE[key] = result
     while len(_WALLS_AREAS_CACHE) > _WALLS_AREAS_CACHE_LIMIT:
         _WALLS_AREAS_CACHE.popitem(last=False)
     return result
+
+
+def _p0_plan_names(root, page_number):
+    """The room names of one plan page: those evidenced on it and, on a house, those the page reading listed."""
+    try:
+        names = {row["label"] for row in _inferred_rooms_for_plan(root, page_number)}
+        from backend import house_windows_service
+        if house_windows_service.is_dwelling(root):
+            names |= set(_reading_room_names(root, page_number))
+            # The saved inference can predate a better text-layer reading. In
+            # particular, letter-spaced labels on house plans (BEDROOM 2,
+            # ENSUITE, WIR) were omitted while their walls were already found.
+            from ai import room_inference
+            spatial = next((row for row in _read(Path(root) / "spatial_ocr.json", {}).get("pages", [])
+                            if row.get("page") == page_number), {})
+            names.update(label for label, _area in room_inference._spatial_label_items(spatial))
+    except PACKET_ERRORS:
+        return set()
+    return {str(name) for name in names if str(name).strip()}
+
+
+def _p0_label_points(root, page_number, context):
+    """[(room name, (x, y))]: where each of the plan's room names is printed on it, in page-image pixels, from the
+    drawing's text layer (letter-spaced names such as "P D R" included). Names printed in the title block are left out."""
+    from ai import room_inference
+    spatial = next((row for row in _read(Path(root) / "spatial_ocr.json", {}).get("pages", [])
+                    if row.get("page") == page_number), {})
+    items = spatial.get("standalone_text_items") or []
+    if not items:
+        return []
+    names = _p0_plan_names(root, page_number)
+    wanted = {"".join(name.casefold().split()): name for name in names}
+    in_title = room_inference.title_block_test(spatial, items)
+    scale = float(context.get("image_scale") or 1.0)   # the text layer is measured from the page box, as the shapes are
+    found = []
+    for text, bbox in room_inference._text_item_lines(items):
+        name = wanted.get("".join(str(text).casefold().split()))
+        if not name or in_title({"bbox": bbox}):
+            continue
+        found.append((name, ((bbox[0] + bbox[2]) / 2.0 * scale, (bbox[1] + bbox[3]) / 2.0 * scale)))
+    return sorted(found)
+
+
+def _split_open_plan_areas(areas, labels, context, walls, mm_per_px, raster_mode):
+    """Each enclosed area that has two or more of the plan's room names printed in it, divided among them with
+    straight cuts along the drawing's features (room_outline.split_open_plan). Areas with one name or none stay whole.
+    A name printed outside every area belongs to the nearest area within reach."""
+    if not labels or not areas:
+        return areas
+    from shapely.geometry import Point
+    reach = room_outline.OPEN_PLAN_LABEL_REACH_MM / mm_per_px
+    owned = {}
+    for name, point in labels:
+        spot = Point(point)
+        owner = next((index for index, area in enumerate(areas) if area.contains(spot)), None)
+        if owner is None:
+            distances = [(area.distance(spot), index) for index, area in enumerate(areas)]
+            nearest = min(distances)
+            if nearest[0] > reach:
+                continue
+            owner = nearest[1]
+        owned.setdefault(owner, []).append((name, point))
+    if not any(len({name for name, _ in rows}) > 1 for rows in owned.values()):
+        return areas
+    segments = [] if raster_mode else room_outline._straight_segments(
+        context["objects"], mm_per_px, room_outline.PAIRED_WALL_MIN_RUN_MM, room_outline.hatch_styles(context["objects"]))
+    segments += [tuple(line.coords) for line in room_outline.wall_face_segments(walls, mm_per_px)]
+    result = []
+    for index, area in enumerate(areas):
+        names = room_outline.labels_in_area(area, owned.get(index, []), mm_per_px)
+        if len(names) < 2:
+            result.append(area)
+            continue
+        result.extend(piece for _name, piece in room_outline.split_open_plan(area, names, segments, mm_per_px))
+    return sorted(result, key=lambda polygon: -polygon.area)
 
 
 def _roof_packets(root, room_id=None):
@@ -622,10 +858,7 @@ def _roof_packets(root, room_id=None):
         traces = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     except (OSError, ValueError, TypeError, KeyError):
         traces = []
-    room_use = _read(root / "room_use_resolution.json", {})
-    comfort_scopes = {"comfort_hvac", "comfort_hvac_with_process_exception"}
-    comfort_ids = {str(row.get("room_id")) for row in room_use.get("records", [])
-                   if isinstance(row, dict) and row.get("room_id") and row.get("space_scope") in comfort_scopes}
+    comfort_ids = _comfort_room_ids(root)
     selected = {}
     for trace in traces:
         if (trace.get("room_id") in comfort_ids and (room_id is None or trace.get("room_id") == room_id)
@@ -662,10 +895,7 @@ def _p6_kitchen_packets(root, room_id=None):
         return []
     import pdfplumber
     ai_input, spatial, _building = _load_inputs(root)
-    room_use = _read(root / "room_use_resolution.json", {})
-    comfort_ids = {str(row.get("room_id")) for row in room_use.get("records", [])
-                   if isinstance(row, dict) and row.get("room_id")
-                   and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    comfort_ids = _comfort_room_ids(root)
     try:
         traces = reviewer_room_geometry_service.current_records(
             reviewer_room_geometry_service._paths({"review_dir": str(root)}))
@@ -1097,7 +1327,14 @@ def _p0_calibration(root, page, context=None):
 def _page_dimension_texts(root, page, context):
     """The dimension numbers printed in the page's text layer, with their boxes in image pixels (the vector reading has
     them; the spatial text reading's boxes are in PDF points)."""
-    _ai_input, spatial, _building = _load_inputs(root)
+    origin = tuple(context.get("page_origin") or (0, 0))[:2]
+    return _memo_by_files("page_dimension_texts", root, ("spatial_ocr.json", "vector_geometry.json"),
+                          lambda: _compute_page_dimension_texts(root, page, context), page,
+                          context.get("render_dpi"), origin)
+
+
+def _compute_page_dimension_texts(root, page, context):
+    spatial = _read(root / "spatial_ocr.json", {})
     vector = _read(root / "vector_geometry.json", {})
     vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", []) if row.get("page") == page), {})
     rows = [row for row in vector_page.get("dimension_candidates") or [] if isinstance(row, dict) and row.get("value_mm") and row.get("bbox_px")]
@@ -1192,6 +1429,16 @@ PACKET_ERRORS = (OSError, ValueError, IndexError, KeyError, TypeError, GEOSExcep
 # readings list a plan's rooms in one sentence (house set 15, 2026-11-02).
 _READ_ROOM_LIST = re.compile(r"\b(?:includes?|rooms?(?:/services)?(?: shown)?:)\s+(.+)$", re.I)
 _READ_ROOM = re.compile(r"^([A-Za-z][A-Za-z'/& -]{1,40}?(?: \d{1,2})?)(?:\s+\d{3,5}\s*[x×]\s*\d{3,5}(?:\s*mm)?)?$")
+# "Infinity pool, spa and deck at rear; living & dining, kitchen, WIR, ensuite, lounge, porch and existing garage" with
+# evidence "room labels on plan": the plan's labels as a plain list, no "includes" or "rooms:" before it (2026.08.06 set,
+# 2026-11-18: neither of its two plans gave the naming step a room name, so the garage was named "Ensuite" and the
+# first floor's Rumpus and bedroom were never asked for).
+_READ_LABELS_EVIDENCE = re.compile(r"\blabels\b", re.I)
+_READ_LABELS_LEAD = re.compile(r"^.*?\blabels\b:?\s+", re.I)       # "Basement plan with labels CELLAR, ..."
+_READ_PLACE_SUFFIX = re.compile(r"\s+(?:at|to|on)\s+(?:the\s+)?(?:rear|front|back|side|left|right|top|bottom|north|south|east|"
+                                r"west)\b.*$", re.I)
+_READ_NOT_A_NAME = re.compile(r"\b(?:dimensions?|area|total|site|mm|overall|width|grid|lines?|marks?|shown?|showing|"
+                              r"sections?|boundar\w*)\b", re.I)
 
 
 def _reading_room_names(root, page):
@@ -1205,11 +1452,21 @@ def _reading_room_names(root, page):
             continue
         what = " ".join(str(item.get("what") or "").split())
         listed = _READ_ROOM_LIST.search(what)
-        parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", re.sub(r"\s*\(.*?\)|\.$", "", listed.group(1))) if listed else [what]
+        labelled = not listed and _READ_LABELS_EVIDENCE.search(str(item.get("evidence") or "")) and re.search(r"[,;]", what)
+        if listed:
+            parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", re.sub(r"\s*\(.*?\)|\.$", "", listed.group(1)))
+        elif labelled:
+            # A plain list of the plan's labels, possibly in clauses ("...deck at rear; living & dining, kitchen").
+            parts = [_READ_PLACE_SUFFIX.sub("", part.strip())
+                     for clause in re.sub(r"\s*\(.*?\)|\.$", "", what).split(";")
+                     for part in re.split(r",\s*(?:and\s+)?|\s+and\s+", _READ_LABELS_LEAD.sub("", clause.strip()))]
+        else:
+            parts = [what]
         for part in parts:
             match = _READ_ROOM.match(part.strip())
             name = match.group(1).strip() if match else ""
-            if name and len(name.split()) <= 4 and not re.search(r"\b(?:dimensions?|area|total|site|mm)\b", name, re.I):
+            not_a_name = _READ_NOT_A_NAME if labelled else re.compile(r"\b(?:dimensions?|area|total|site|mm)\b", re.I)
+            if name and len(name.split()) <= 4 and not not_a_name.search(name):
                 names.add(name[0].upper() + name[1:])
     return sorted(names)
 
@@ -1282,6 +1539,51 @@ def _cached_inferred_room_data(root, input_signature):
     return rooms
 
 
+_SETTLED_STYLE = {"applied", "below_accuracy_bar"}
+
+
+def _page_wall_style_ids(root, page, records=None):
+    """(wall style ids, borrowed) for one plan page: the styles the wall-style task chose on it, or, when that task
+    answered and chose none, the styles the same drawing set's other floor plans chose that this page also draws.
+
+    The plans of one set are drawn with the same pens, so a wall pen on the first floor and basement is a wall pen on
+    the ground floor too. On the Turramurra house (2026-11-18) the task chose no wall style on the ground-floor plan
+    although it chose the same heavy wall line (style-9b1117bacc, 1,722 m drawn on that sheet) on the other two; with
+    no walls the plan's room naming was blocked, no open-plan outline was ever asked, and Kitchen, Entry, Media, Scullery
+    and Bedroom 5 had no outline. Borrowed styles only give the naming and outline steps walls to work with; their
+    areas are still named and checked by those steps. borrowed is [{"style_id", "pages"}] (empty when nothing was
+    borrowed)."""
+    records = _p0_wall_style_records(root, page) if records is None else records
+    chosen = sorted({style_id for row in records for style_id in (row.get("applied_value") or {}).get("wall_style_ids", [])})
+    if chosen or not records or any(row.get("status") not in _SETTLED_STYLE for row in records):
+        return chosen, []
+    present = {row["style_id"] for row in _p0_context(root, page)["summary"] if not row.get("hatch")}
+    votes = {}
+    for plan in _p0_main_geometry_pages(root):
+        other = plan.get("page")
+        if other == page:
+            continue
+        try:
+            other_records = _p0_wall_style_records(root, other)
+        except PACKET_ERRORS:
+            continue
+        if not other_records or any(row.get("status") not in _SETTLED_STYLE for row in other_records):
+            continue
+        for style_id in {value for row in other_records for value in (row.get("applied_value") or {}).get("wall_style_ids", [])}:
+            if style_id in present:
+                votes.setdefault(style_id, set()).add(other)
+    borrowed = [{"style_id": style_id, "pages": sorted(pages)} for style_id, pages in sorted(votes.items())]
+    return sorted(votes), borrowed
+
+
+def _borrowed_styles_note(page, borrowed):
+    pages = sorted({number for row in borrowed for number in row["pages"]})
+    return (f"The wall-style check chose no wall line on plan page {page}; the wall lines chosen on the same set's other "
+            f"floor plan{'s' if len(pages) > 1 else ''} (page{'s' if len(pages) > 1 else ''} "
+            f"{', '.join(map(str, pages))}), which this plan also draws, were used to find its rooms (labelled assumption: "
+            "one drawing set uses the same wall pens on every floor plan).")
+
+
 def _p0_followup_packets(root):
     result = []
     pages = _p0_main_geometry_pages(root)
@@ -1294,12 +1596,13 @@ def _p0_followup_packets(root):
             if not calibration:
                 continue  # Dimension tasks remain available; geometry waits for the required calibration.
             raster_mode = _p0_is_raster(root, number, context, calibration)
+            borrowed_styles = []
             if raster_mode:
                 wall_style_ids = []
             else:
                 if not styles or any(style.get("status") not in {"applied", "below_accuracy_bar"} for style in styles):
                     continue
-                wall_style_ids = sorted({style_id for style in styles for style_id in style["applied_value"].get("wall_style_ids", [])})
+                wall_style_ids, borrowed_styles = _page_wall_style_ids(root, number, styles)
                 if not wall_style_ids:
                     result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                                    "No wall styles were identified across the complete legend; enclosed-room naming is unavailable."))
@@ -1315,6 +1618,8 @@ def _p0_followup_packets(root):
             read_names = _reading_room_names(root, number) if dwelling else []
             if read_names:
                 room_names = sorted({*room_names, *read_names})
+            if dwelling:
+                room_names = sorted(set(room_names) | _p0_plan_names(root, number))
             notes = _note_only_rooms(root, room_names)
             naming_packet = {"task":"P0_room_names", "page":number, **({"dwelling":True} if dwelling else {}),
                              "on_page_text": _p0_page_room_text(root, number),
@@ -1322,7 +1627,10 @@ def _p0_followup_packets(root):
                              **({"note_only_rooms": notes} if notes else {}),
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
                              "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
-                             **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {})}
+                             **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {}),
+                             **({"wall_styles_borrowed": borrowed_styles,
+                                 "wall_styles_note": _borrowed_styles_note(number, borrowed_styles)}
+                                if not raster_mode and borrowed_styles else {})}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
                            room_outline.room_naming_prompt(room_names, len(areas), notes, dwelling=dwelling), [_png_bytes(image)], ""))
         except PACKET_ERRORS as error:
@@ -1401,9 +1709,28 @@ def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None,
     else:
         placed = set()
         room_names = sorted({row["label"] for row in inferred_rooms})
+    if dwelling:
+        page = ((names_record or {}).get("packet") or {}).get("page")
+        if page is None:
+            page = next((row.get("page") for row in inferred_rooms if row.get("page") is not None), None)
+        if page is not None:
+            room_names = sorted(set(room_names) | _p0_plan_names(root, page))
     printed = {row["label"] for row in inferred_rooms if row.get("area_m2")}
-    missing = sorted(set(requested_rooms)) if requested_rooms else sorted(set(room_names) - placed - printed)
+    if requested_rooms:
+        return room_names, sorted(set(requested_rooms))
+    # The page reading's "Ensuites" is the naming step's "Ensuite" or "Ensuite (2)": asked to sketch it again, the AI
+    # drew one of them and was refused (Turramurra first floor, 2026-11-21).
+    covered = {_room_name_key(name) for name in placed | printed}
+    missing = sorted(name for name in set(room_names) - placed - printed if _room_name_key(name) not in covered)
     return room_names, missing
+
+
+def _room_name_key(name):
+    """A room name compared without case, an occurrence number ("(2)") or a plural "s": Ensuites = Ensuite (2)."""
+    text = re.sub(r"\s*\(\d+\)\s*$", "", str(name or "")).casefold()
+    words = re.findall(r"[a-z0-9]+", text)
+    return " ".join(word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+                    for word in words)
 
 
 def _tenancy_rooms_needing_outline(root, page):
@@ -1444,39 +1771,82 @@ TENANCY_NOT_NEEDED = ("Every room on this plan already has an outline from the w
                       "so the tenancy outline isn't needed to trim AI-drawn rooms.")
 
 
-def _p0_outline_packets(root, requested_rooms=None):
+def _room_use_names_on_page(root, page):
+    """The room names the room-use step found printed on this page (its excerpt cites the page), casefolded. The
+    room-use step read "KITCHEN" on Job A's ground-floor plan while the text layer and the page reading gave no room
+    list for it, so the Phase 1 check's outline question for the Kitchen found no plan to ask (2026-11-19)."""
+    names = set()
+    for row in _read(Path(root) / "room_use_resolution.json", {}).get("records", []):
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("original_label") or row.get("label") or "").strip()
+        if label and any(isinstance(item, dict) and item.get("page") == page and str(item.get("excerpt") or "").strip()
+                         for item in row.get("evidence") or []):
+            names.add(label.casefold())
+    return names
+
+
+def _p0_outline_packets(root, requested_rooms=None, skipped=None):
+    """skipped: an optional list that is given (page, why no packet was built for it) for each plan page passed over,
+    so a targeted check can say which prerequisite is missing instead of a generic "unavailable"."""
     result = []
+    skipped = [] if skipped is None else skipped
     from backend import house_windows_service
     dwelling = house_windows_service.is_dwelling(root)
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         if not requested_rooms and _tenancy_waiting(root, number):
+            skipped.append((number, "the tenancy outline question is still waiting for its answer"))
             continue      # its outlines are clipped to the tenancy once that is answered
         names_record = _current_task(root, "P0_room_names", f"page-{number}")
-        if names_record and names_record.get("status") not in {"applied", "below_accuracy_bar"}: continue
+        plan_rooms = _inferred_rooms_for_plan(root, number)
+        page_requested = None
+        if requested_rooms:
+            # Only the requested rooms this plan shows: the Phase 1 check asked the first-floor and basement plans to
+            # outline the ground floor's Kitchen (Turramurra, 2026-11-18) because the ground floor had no packet.
+            on_plan = {str(row["label"]).casefold() for row in plan_rooms}
+            on_plan.update(str(name).casefold() for name in ((names_record or {}).get("packet") or {}).get("room_names", []))
+            if dwelling:
+                on_plan.update(name.casefold() for name in _reading_room_names(root, number))
+            on_plan.update(_room_use_names_on_page(root, number))
+            page_requested = [name for name in requested_rooms if str(name).casefold() in on_plan]
+            if not page_requested:
+                skipped.append((number, f"{', '.join(map(str, requested_rooms))} not named on this plan"))
+                continue
         wall_records = _p0_wall_style_records(root, number)
         try:
             context = _p0_context(root, number)
-            calibration, _calibration_error = _p0_calibration_ready(root, number, context)
+            calibration, calibration_error = _p0_calibration_ready(root, number, context)
             if not calibration:
+                skipped.append((number, "the plan's scale is not settled" + (f" ({calibration_error})" if calibration_error else "")))
                 continue
             raster_mode = _p0_is_raster(root, number, context, calibration)
+            borrowed_styles = []
             if raster_mode:
                 wall_style_ids = []
             else:
                 if (not wall_records or
                         any(row.get("status") not in {"applied", "below_accuracy_bar"} for row in wall_records)):
+                    skipped.append((number, "the wall-style question has not been asked yet" if not wall_records else
+                                    "the wall-style question is not answered yet"))
                     continue
-                wall_style_ids = sorted({style_id for row in wall_records
-                                         for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
-                if not wall_style_ids:
-                    continue
-                wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
-            _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
-                                                        wall_style_ids, raster_mode)
-            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms,
-                inferred_rooms=_inferred_rooms_for_plan(root, number), dwelling=dwelling)
+                wall_style_ids, borrowed_styles = _page_wall_style_ids(root, number, wall_records)
+                if wall_style_ids:
+                    wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
+            names_blocked = bool(names_record) and names_record.get("status") not in {"applied", "below_accuracy_bar"}
+            if names_blocked and not (names_record.get("status") == "blocked" and not wall_style_ids and not raster_mode):
+                skipped.append((number, "the room-naming question is not answered yet"
+                                + (f" ({names_record.get('block_reason')})" if names_record.get("block_reason") else "")))
+                continue    # the naming question is still open: the open-plan outlines follow its answer
+            if names_blocked:
+                # No wall line at all on this plan (not even one its sibling plans use): its naming can't be asked, so
+                # every room on it is asked as an open-plan outline rather than left with no outline.
+                names_record = None
+            _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration, wall_style_ids, raster_mode)
+            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), page_requested,
+                inferred_rooms=plan_rooms, dwelling=dwelling)
             if not missing:
+                skipped.append((number, "every room named on it already has an outline or a printed area"))
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
             references, reference_images = _p0_name_sheets(root, number, missing)
@@ -1485,7 +1855,9 @@ def _p0_outline_packets(root, requested_rooms=None):
             packet = {"task":"P0_room_outlines", "page":number, **({"dwelling":True} if dwelling else {}), "room_names":missing, "transform":transform,
                       "on_page_text": _p0_page_room_text(root, number),
                       "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
-                      "name_sheets":references, **({"note_only_rooms": notes} if notes else {})}
+                      "name_sheets":references, **({"note_only_rooms": notes} if notes else {}),
+                      **({"wall_styles_borrowed": borrowed_styles,
+                          "wall_styles_note": _borrowed_styles_note(number, borrowed_styles)} if borrowed_styles else {})}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
                            [_png_bytes(image), *reference_images], ""))
         except PACKET_ERRORS as error:
@@ -1571,6 +1943,34 @@ def _settled(record):
             or len(record.get("reply_attempts") or []) >= 2)
 
 
+def _dropped_spaces(record):
+    """Casefolded names of the spaces a step's own checks dropped (kept in its reply, listed in applied_value)."""
+    applied = (record or {}).get("applied_value") if isinstance((record or {}).get("applied_value"), dict) else {}
+    return {str(row.get("room", "")).casefold() for row in applied.get("dropped") or [] if isinstance(row, dict)}
+
+
+def _retire_dropped_corner_outlines(project, root, page, subjects):
+    """Remove the AI outline of a space its step dropped, built from a corner answer given before the drop was honoured
+    (the Turramurra basement "Corridor", 2026-11-21), unless another step still sketches that room on the page."""
+    dropped = set()
+    for task in ("P0_room_outlines", "P0_unnamed_space"):
+        dropped |= _dropped_spaces(_current_task(root, task, f"page-{page}"))
+    dropped -= {str(room).casefold() for _target, room, _source, _sketches in subjects if room}
+    if not dropped:
+        return
+    try:
+        traces = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    except (OSError, ValueError, TypeError, KeyError):
+        return
+    stale = sorted({row.get("room_label") for row in traces
+                    if row.get("page") == page and row.get("method") == "ai_corner_outline"
+                    and row.get("declaration_source") in {"ai_determined", "ai_fallback"}
+                    and str(row.get("room_label", "")).casefold() in dropped})
+    if stale:
+        reviewer_room_geometry_service.persist_ai_determined_traces(None, project, [], "dropped-space-cleanup",
+            "AI-determined (below accuracy bar)", replace_pages=[page], replace_room_labels=stale)
+
+
 def _corner_subjects(root, page):
     """What the AI sketched on a plan page that has no corner-built outline yet: [(target, room or None, source task,
     [sketch pieces as point lists])]. The tenancy comes first; rooms only once its corners are settled."""
@@ -1589,16 +1989,62 @@ def _corner_subjects(root, page):
         value = record.get("validation")
         value = value.get("result", value) if isinstance(value, dict) else value     # the reply handler wraps it
         value = value.get("spaces", []) if isinstance(value, dict) else value
+        # A space the step itself dropped (mostly inside rooms already traced: the Turramurra basement "Corridor",
+        # 2026-11-21) is not asked about again; its sketch stays in the reply, so the reply alone isn't the answer.
+        dropped = _dropped_spaces(record)
         pieces = {}
         for row in value if isinstance(value, list) else []:
-            if isinstance(row, dict) and row.get("room") and len(row.get("points") or []) >= 3:
+            if (isinstance(row, dict) and row.get("room") and len(row.get("points") or []) >= 3
+                    and str(row["room"]).casefold() not in dropped):
                 pieces.setdefault(row["room"], []).append(row["points"])
         removed = rooms_not_on_plan(root)
         for room, sketches in sorted(pieces.items()):
             if room.casefold() in removed:
                 continue        # a note-only room the plan doesn't show gets no corner question
-            subjects.append((f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}", room, task, sketches))
+            target = f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}"
+            earlier = next((index for index, row in enumerate(subjects) if row[0] == target), None)
+            if earlier is None:
+                subjects.append((target, room, task, sketches))
+                continue
+            # The floor-with-no-room step named a space after a room the outline step already traced: one corner
+            # question per room. Two sketches under one target replaced each other's question on every rebuild, so one
+            # was always left unsent and the room's area flipped between the two answers (Turramurra Store, page 25,
+            # 2026-11-18: 7.8 m² and 5.8 m²). The same space is asked once; a separate piece is added to its sketch.
+            name, owner, source, kept = subjects[earlier]
+            extra = [points for points in sketches if not _same_sketched_space(points, kept)]
+            if extra:
+                subjects[earlier] = (name, owner, source, [*kept, *extra])
     return subjects
+
+
+# What the screen says when one way of finding a plan's scale gave nothing usable and the next one takes over. The
+# checker's refusal is written for the AI ("Return a readable scale notation ... or null so ..."); it is kept in the
+# record's validation and reply history, never shown as the reason (Turramurra, 2026-11-18).
+_SCALE_FALLBACK_TEXT = {
+    "P0_dimensions": "The printed dimension{where} couldn't be read; the scale is found another way.",
+    "P0_scale_read": "No readable scale{where}; the scale is found another way.",
+    "P0_scale_objects": "No standard object{where} gave a usable scale; the scale is found another way.",
+}
+SCALE_FALLBACK_TASKS = frozenset(_SCALE_FALLBACK_TEXT)
+
+
+def scale_fallback_reason(task, target):
+    match = re.search(r"page-(\d+)", str(target or ""))
+    return _SCALE_FALLBACK_TEXT[task].format(where=f" on page {match.group(1)}" if match else " on the plan")
+
+
+def _same_sketched_space(points, sketches, share=0.5):
+    """Whether a sketched piece mostly covers floor already sketched (half its area or more)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    try:
+        piece = Polygon(points).buffer(0)
+        drawn = unary_union([Polygon(row).buffer(0) for row in sketches if len(row) >= 3])
+    except (ValueError, TypeError, GEOSException):
+        return False
+    if piece.is_empty or not piece.area:
+        return True
+    return piece.intersection(drawn).area >= share * piece.area
 
 
 def _p0_corner_packets(root, force=False):
@@ -1610,6 +2056,7 @@ def _p0_corner_packets(root, force=False):
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         subjects = _corner_subjects(root, number)
+        _retire_dropped_corner_outlines({"id": Path(root).name, "review_dir": str(root)}, root, number, subjects)
         if not subjects:
             continue
         try:
@@ -1618,8 +2065,7 @@ def _p0_corner_packets(root, force=False):
             if not calibration or _p0_is_raster(root, number, context, calibration):
                 continue            # an image-only plan has no drawn corners; its sketches stay
             mm_per_px = float(context.get("declared_mm_per_px") or calibration["mm_per_px"])
-            wall_style_ids = sorted({style_id for row in _p0_wall_style_records(root, number)
-                                     for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+            wall_style_ids, _borrowed = _page_wall_style_ids(root, number)
             if wall_style_ids:
                 wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
         except PACKET_ERRORS as error:
@@ -1856,7 +2302,7 @@ def _p0_size_packets(root, requested_rooms=None):
            and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
         return []
     inferred = _inferred_room_data(root)
-    traced = reviewer_room_geometry_service.current_traced_areas(root).values()
+    traced = _current_traced_areas(root).values()
     result = []
     for plan in pages:
         number = plan["page"]
@@ -1865,8 +2311,12 @@ def _p0_size_packets(root, requested_rooms=None):
                 if (row.get("page") == number or (len(pages) == 1 and row.get("page") is None))
                 and isinstance(row.get("area_m2"), (int, float))
                 and row["area_m2"] >= room_outline.minimum_room_area(row.get("room_label"))}
-        missing = ([name for name in requested_rooms if name in names] if requested_rooms else
-                   [name for name in names if name.casefold() not in have])
+        if requested_rooms:
+            # A requested room counts as on this plan when the room-use step read its name here, as the outline step does.
+            on_plan = {name.casefold() for name in names} | _room_use_names_on_page(root, number)
+            missing = [name for name in requested_rooms if str(name).casefold() in on_plan]
+        else:
+            missing = [name for name in names if name.casefold() not in have]
         if not missing:
             continue
         try:
@@ -1905,7 +2355,7 @@ def _apply_p0_sizes(web, project, root, record, validated):
     tenancy = validated.get("tenancy_area_m2")
     if tenancy and len(left) == 1:
         others = {str(row.get("room_label", "")).casefold(): float(row["area_m2"])
-                  for row in reviewer_room_geometry_service.current_traced_areas(root).values()
+                  for row in _current_traced_areas(root).values()
                   if isinstance(row.get("area_m2"), (int, float)) and str(row.get("room_label", "")).casefold() != left[0].casefold()}
         others.update({row["label"].casefold(): row["area_m2"] for row in rooms})
         remainder = tenancy - sum(others.values())
@@ -2053,9 +2503,16 @@ def _p4_elevation_image(root, page_number):
 
 
 def _comfort_room_ids(root):
+    """The rooms the drawing work is done for: those whose use is cooled, as changed on the quick-fix screen ("Not
+    cooled" / "Cool it"). A room that isn't air-conditioned needs no wall, window or roof work: the calculation leaves
+    it out (user request 2026-11-23; Turramurra's Driveway and Fence were still asked about after being switched off)."""
+    from backend import quick_fix_service
     uses = _read(root / "room_use_resolution.json", {})
-    return {str(row.get("room_id")) for row in uses.get("records", []) if isinstance(row, dict)
-            and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    ids = {str(row.get("room_id")) for row in uses.get("records", []) if isinstance(row, dict)
+           and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    for key, cooled in quick_fix_service.cooled_choices(root).items():
+        (ids.add if cooled else ids.discard)(str(key))
+    return ids
 
 
 def _geometrically_shared_edge_indices(trace, other_traces, max_wall_mm=400.0, angle_tolerance_deg=5.0,
@@ -2288,8 +2745,7 @@ def _edge_wall_coverage(root, page, traces):
     it looks onto more drawn building}}} from the page's chosen wall styles; empty when the wall styles or page
     geometry aren't available (raster pages, no wall-style answer)."""
     try:
-        records = _p0_wall_style_records(root, page)
-        style_ids = sorted({style_id for row in records for style_id in (row.get("applied_value") or {}).get("wall_style_ids", [])})
+        style_ids, _borrowed = _page_wall_style_ids(root, page)
         if not style_ids:
             return {}
         segments = room_outline.drawn_segments(_p0_context(root, page)["objects"], style_ids)
@@ -2332,9 +2788,16 @@ def _house_without_shared_walls(root):
     return not _SHARED_WALL.search(text)
 
 
-def _p3_packets(root, room_id=None, page_number=None, force=False):
+HOUSE_WALLS_BY_RULE = ("a house whose drawings mention no wall shared with another dwelling: its unclassified walls "
+                       "are set by rule (outside unless a traced room is beyond them), so no outside-walls question is asked")
+
+
+def _p3_packets(root, room_id=None, page_number=None, force=False, skipped=None):
+    """skipped: an optional list given (page or None, why no packet was built) for each page passed over."""
     result=[]
+    skipped = [] if skipped is None else skipped
     if _house_without_shared_walls(root):
+        skipped.append((None, HOUSE_WALLS_BY_RULE))
         return result
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
@@ -2345,16 +2808,26 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
                       if room_id is not None else None)
     grouped={}
     for trace in selected: grouped.setdefault(trace.get("page"),[]).append(trace)
+    if not selected:
+        skipped.append((page_number, "no room has a traced outline on a plan with a usable scale yet" if not traces
+                        else "no traced outline has a usable scale yet"))
+    elif affected_pages is not None and not affected_pages & set(grouped):
+        skipped.append((page_number, f"no traced outline with a usable scale on page {page_number}" if page_number is not None
+                        else "the room has no traced outline with a usable scale yet"))
     ai_input,spatial,_building=_load_inputs(root)
     dwelling = __import__("backend.house_windows_service", fromlist=["is_dwelling"]).is_dwelling(root)
     elevation_rows=[] if dwelling else _storefront_elevation_pages(ai_input)
     for page,traces_on_page in sorted(grouped.items()):
         if affected_pages is not None and page not in affected_pages: continue
         comfort_traces=[row for row in traces_on_page if row.get("room_id") in comfort]
-        if not comfort_traces: continue
+        if not comfort_traces:
+            skipped.append((page, "no cooled room is traced on it"))
+            continue
         target=f"page-{page}"
         current=_current_task(root,"P3_boundaries",target)
-        if not force and room_id is None and current and current.get("status") in {"applied","below_accuracy_bar"}: continue
+        if not force and room_id is None and current and current.get("status") in {"applied","below_accuracy_bar"}:
+            skipped.append((page, "its outside-walls question is already answered"))
+            continue
         perimeter=_page_perimeter_data(traces_on_page)
         if perimeter["error"]:
             result.append(("P3_boundaries",target,{"task":"P3_boundaries","page":page},"",[],perimeter["error"]))
@@ -3059,6 +3532,65 @@ def _number_separate_house_bedrooms(root, record, polygons, mm_per_px):
     return polygons
 
 
+def number_repeated_rooms(labels_and_shapes, mm_per_px, printed_labels=()):
+    """Separate rooms one name was printed on, for every name but Bedroom (numbered Bedroom 1, 2 by the steps above):
+    same-named outlines with a wall between them become "Ensuite (1)", "Ensuite (2)", ... in plan reading order, so
+    each is its own room with its own area (Turramurra's three first-floor ensuites were one 16.4 m² room, 2026-11-18).
+    Pieces that touch, or are under 1 m², stay one room. A number the drawing prints for that name on the level
+    ("Ensuite 2") is skipped. Returns ({index: new label}, [(new label, drawing label)])."""
+    from ai.room_use_resolution import occurrence_label, occurrence_number
+    by_name = {}
+    for index, (label, shape) in enumerate(labels_and_shapes):
+        name = str(label or "").strip()
+        if (not name or name.casefold() in {"bedroom", "bed"} or name == room_outline.NOT_A_ROOM
+                or occurrence_number(name) is not None or shape is None):
+            continue
+        by_name.setdefault(name.casefold(), []).append(index)
+    renamed, numbered = {}, []
+    for key, indexes in by_name.items():
+        if len(indexes) < 2:
+            continue
+        groups = room_outline.separate_rooms([labels_and_shapes[index][1] for index in indexes], mm_per_px)
+        if len(groups) < 2:
+            continue
+        base = str(labels_and_shapes[indexes[0]][0]).strip()
+        used = {int(match.group(1)) for label in printed_labels
+                if (match := re.fullmatch(re.escape(base) + r"\s*(\d+)", str(label or "").strip(), re.I))}
+        number = 1
+        for group in groups:
+            while number in used:
+                number += 1
+            label = occurrence_label(base, number)
+            used.add(number)
+            numbered.append((label, base))
+            for position in group:
+                renamed[indexes[position]] = label
+    return renamed, numbered
+
+
+def _number_separate_repeated_rooms(root, record, polygons, mm_per_px):
+    """Apply number_repeated_rooms to one step's outlines on a house plan page and keep the numbered rooms in the room
+    list (the merged plain-name record on the level is replaced). Shops are unchanged, as for bedrooms."""
+    from backend import house_windows_service, room_proposal
+    if not house_windows_service.is_dwelling(root):
+        return polygons
+    page = int(record["packet"]["page"])
+    level = _page_level(root, page)
+    from ai.page_inventory import level_key
+    rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    printed = [room.get("label", "") for room in rooms if level_key(room.get("level_name")) == level_key(level)]
+    renamed, numbered = number_repeated_rooms(
+        [(row.get("label"), row.get("net_polygon") or row.get("polygon")) for row in polygons], mm_per_px, printed)
+    for index, label in renamed.items():
+        polygons[index]["label"] = label
+    room_proposal.save_numbered_rooms(root, f"P0_numbered_repeat:{record['task']}:{record['target']}", page, level,
+                                      numbered, record["run_id"])
+    return polygons
+
+
+SQUARED_METHODS = {"ai_outline_snapped", "ai_corner_outline", "ai_split_snapped"}
+
+
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
@@ -3066,6 +3598,7 @@ def _p0_trace_rows(root, record, polygons):
         raise ValueError("P0 cannot apply room areas until printed dimensions calibrate within 2%.")
     if record.get("task") != "P0_room_names":       # the naming step numbers its own (_number_repeated_house_bedrooms)
         polygons = _number_separate_house_bedrooms(root, record, polygons, float(calibration["mm_per_px"]))
+    polygons = _number_separate_repeated_rooms(root, record, polygons, float(calibration["mm_per_px"]))
     rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     room_ids = {}
     for room in rooms:
@@ -3092,6 +3625,8 @@ def _p0_trace_rows(root, record, polygons):
             continue
         indexes[row["label"]] = indexes.get(row["label"], 0) + 1
         polygon = row["polygon"]
+        if row.get("method") in SQUARED_METHODS:   # drawn by the AI: nearly square sides made square
+            polygon = room_outline.square_polygon(polygon)
         mm_per_px = float(calibration["mm_per_px"])
         simplified = _simplify_trace_polygon(polygon, 250.0 / mm_per_px)
         coords = [[round(float(x), 2), round(float(y), 2)] for x, y in simplified.exterior.coords]
@@ -3248,6 +3783,11 @@ def _number_repeated_house_bedrooms(names, areas, printed_names=()):
 
 
 def _main_plan_levels(root):
+    return _memo_by_files("main_plan_levels", root, ("page_inventory.json", "drawing_coverage.json"),
+                          lambda: _compute_main_plan_levels(root))
+
+
+def _compute_main_plan_levels(root):
     from ai import page_inventory
     readings = {int(number): row for number, row in (_read(Path(root) / "page_inventory.json", {}).get("pages") or {}).items()
                 if str(number).isdigit() and isinstance(row, dict)}
@@ -3346,8 +3886,7 @@ def _apply_p0_unnamed_space(web, project, root, record, validated, *, defer=Fals
     context = _p0_context(root, page)
     try:    # the drawn lines the outline snaps to, as for the open-plan outlines
         raster_mode = _p0_is_raster(root, page, context, calibration)
-        wall_style_ids = [] if raster_mode else sorted({style_id for row in _p0_wall_style_records(root, page)
-                                                        for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+        wall_style_ids = [] if raster_mode else _page_wall_style_ids(root, page)[0]
         if wall_style_ids:
             wall_style_ids, _added = _completed_wall_styles(root, page, context, calibration, wall_style_ids)
         _walls, _areas, segments = _p0_walls_areas(root, page, context, calibration, wall_style_ids, raster_mode)
@@ -3766,6 +4305,18 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     # The current record is kept for the same question only when both or neither are "not needed": a task now known
     # to be not needed replaces an older blocked one, and a withdrawn (not needed) question is asked again when needed.
     reusable = bool(current) and (current.get("status") == "not_needed") == not_needed
+    if (reusable and task == "P0_room_outlines" and not packet.get("supervisor_note")
+            and current.get("status") in {"applied", "below_accuracy_bar"}
+            and (current.get("packet") or {}).get("supervisor_note")):
+        # The first ordinary rebuild after the targeted answer can reflect that answer's own
+        # room evidence. Record that settled baseline once; only later changes to it re-ask.
+        settled = current.get("post_answer_base_fingerprint")
+        if not settled:
+            current["post_answer_base_fingerprint"] = input_fingerprint
+            _update_record(root, current)
+            return current
+        if settled == input_fingerprint:
+            return current
     if reusable and (current.get("input_fingerprint") == input_fingerprint or (
             not packet.get("supervisor_note") and current.get("base_input_fingerprint") == input_fingerprint)):
         return current
@@ -3882,8 +4433,11 @@ def _task_progress(root):
                                             for record in records)).encode("utf-8")).hexdigest()[:16]
     waiting = sum(1 for record in records if record.get("status") == "waiting_for_reply" and not _not_answered(record))
     finished = isinstance(supervisor, dict) and supervisor.get("status") == "done"
+    from backend.job_progress import in_flight
+    sending_later = (not supervisor.get("provider_limited") and
+                     (in_flight(supervisor) or in_flight(_read(Path(root) / "calculation_job.json", {}))))
     return {"total": len(records),
-            "waiting": 0 if finished else waiting,
+            "waiting": 0 if finished or sending_later else waiting,
             "left_waiting": waiting if finished else 0,
             "not_answered": sum(1 for record in records if _not_answered(record)),
             "blocked": sum(1 for record in records if record.get("status") == "blocked"),
@@ -4146,7 +4700,11 @@ def _apply_p1(root, project, record, validated):
                          ("; task below accuracy bar" if not record["accuracy"].get("auto_apply") else ""))
                          if source == "ai_fallback" else record["quality_label"], "ai_run_id": record["run_id"],
                      "reply_hash": record["reply_hash"], "input_fingerprint": record["input_fingerprint"],
-                     "evidence": next(row["text"] for row in record["packet"]["excerpts"] if row["page"] == site["page"] and site["text"] in row["text"]),
+                     # The checker may add the lot/DP from another excerpt to the site text, so the cited page's
+                     # excerpt is the evidence when no one excerpt holds the whole text (it used to end the drawing
+                     # step with StopIteration).
+                     "evidence": next((row["text"] for row in record["packet"]["excerpts"] if row["page"] == site["page"] and site["text"] in row["text"]),
+                                      next((row["text"] for row in record["packet"]["excerpts"] if row["page"] == site["page"]), "")),
                      "consultant_addresses": deepcopy(validated["consultant_addresses"])}
     cross_check = autonomous_tasks.site_cross_check(record["packet"], validated)
     determination["cross_check"] = cross_check
@@ -4525,7 +5083,7 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
         if task in {"P0_dimensions", "P0_scale_read", "P0_scale_objects"}:
             # The next way of finding the scale takes over (another dimension line, the printed scale, standard
             # objects, then an assumed 1:100): this reading is no longer needed and doesn't hold the job.
-            record.update({"status": "not_needed", "block_reason": f"Not usable ({error}); the next way of finding the scale is used.",
+            record.update({"status": "not_needed", "block_reason": scale_fallback_reason(task, record.get("target")),
                            "validation": {"valid": False, "error": str(error)}, "applied_value": {"fallback_required": True}})
             archived = _read(reply_path, {})
             archived.update({"outcome": "rejected_fallback", "reason": str(error)})
@@ -4577,6 +5135,29 @@ def image(web, project, data):
     return {"path": str(resolved), "content_type": "image/png"}
 
 
+def unavailable_reason(task, names, skipped, pages=()):
+    """Why no packet could be built for a targeted check, naming the missing prerequisite per plan page."""
+    label = TASK_PREREQUISITE_LABELS.get(task, "this check")
+    who = f" for {', '.join(map(str, names))}" if names else ""
+    reasons = {}
+    for page, why in skipped:
+        if pages and page is not None and page not in pages and any(row[0] in pages for row in skipped):
+            continue
+        reasons.setdefault(why, []).append(page)
+    if not reasons:
+        return (f"No {label} could be built{who}: the current drawings give no plan page for it "
+                "(no main floor plan with this room).")
+    parts = []
+    for why, on in reasons.items():
+        numbered = sorted(page for page in set(on) if page is not None)
+        parts.append((f"page{'s' if len(numbered) != 1 else ''} {', '.join(map(str, numbered))}: " if numbered else "") + why)
+    return f"No {label} could be built{who}; missing prerequisite — " + "; ".join(parts) + "."
+
+
+TASK_PREREQUISITE_LABELS = {"P0_room_outlines": "room-outline question", "P0_room_sizes": "room-size question",
+                            "P3_boundaries": "outside-walls question"}
+
+
 def prepare_investigation(project, investigation):
     """Build a focused drawing-task run using its usual evidence packet and validation contract."""
     from backend.job_runner import checkpoint
@@ -4584,13 +5165,14 @@ def prepare_investigation(project, investigation):
     root = _root(project)
     task = investigation["task"]
     names = investigation.get("room_names") or ([investigation["room"]] if investigation.get("room") else None)
+    skipped = []
     builders = {
-        "P0_room_outlines": lambda: _p0_outline_packets(root, requested_rooms=names),
+        "P0_room_outlines": lambda: _p0_outline_packets(root, requested_rooms=names, skipped=skipped),
         "P0_room_sizes": lambda: _p0_size_packets(root, requested_rooms=names),
         "P0_unnamed_space": lambda: _p0_unnamed_space_packets(root, force=True),
         "P0_tenancy_outline": lambda: _p0_tenancy_packets(root, force=True),
         "P0_outline_corners": lambda: _p0_corner_packets(root, force=True),
-        "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True),
+        "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True, skipped=skipped),
         "P3_surroundings": lambda: _p3_surroundings_packets(root),
         "P4_storefront_wall": lambda: _p4_packets(root),
         "P4_openings": lambda: _p4_packets(root, only_room_id=investigation.get("room_id") or None),
@@ -4611,7 +5193,7 @@ def prepare_investigation(project, investigation):
         on_page = [row for row in candidates if row[2].get("page") in pages]
         candidates = on_page or candidates
     if not candidates:
-        raise ValueError("The current drawings cannot yet provide a packet for this check; its prerequisite remains unresolved.")
+        raise ValueError(unavailable_reason(task, names, skipped, pages))
     # One packet per targeted attempt. Prefer a new view after a valid answer
     # failed to resolve the same gap; rejected answers get their correction retry.
     tried_targets = set(investigation.get("previous_targets", []))

@@ -15,7 +15,7 @@
     "@playwright/test": "^1.62.1"
   },
   "engines": {
-    "python": ">=3.9"
+    "python": ">=3.12"
   },
   "_note": [
     "The frontend has no build step or runtime npm dependency \u2014 index.html, css/ and js/",

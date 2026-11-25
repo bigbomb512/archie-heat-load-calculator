@@ -5,10 +5,12 @@ const skillLabel = (row) => row.label || String(row.id || "Evidence review").rep
 const running = (value) => value?.step_state === "active";
 const finished = new Set(["resolved", "provisional", "needs_review", "completed", "done", "excluded", "not_applicable", "not_needed"]);
 const hidden = new Set(["not_in_scope", "not_enabled"]);
+// An out-of-date skill did finish: its earlier answer is kept and still used until the review runs again.
+const answered = (status) => finished.has(status) || status === "stale";
 const labels = {
   running: "Working", queued: "Waiting", not_started: "Waiting", blocked: "Waiting for evidence",
   resolved: "Checked", provisional: "Finished with assumptions", needs_review: "Finished with exceptions",
-  completed: "Finished", done: "Finished", failed: "Stopped", interrupted: "Interrupted", stale: "Out of date",
+  completed: "Finished", done: "Finished", failed: "Stopped", interrupted: "Interrupted", stale: "Finished; earlier answer kept, out of date",
   excluded: "Excluded", not_applicable: "Not needed", not_needed: "Not needed", applied: "Answer applied", applied_fallback: "Estimate applied",
   below_accuracy_bar: "Estimate applied", waiting_for_reply: "Answer rejected; correction needed",
   rejected: "Answer rejected", provider_failed: "AI request failed", unavailable: "Evidence unavailable",
@@ -32,7 +34,7 @@ function skillRow(row, activeRun, rows) {
     .map((other) => other.label || "earlier evidence");
   const summary = row.summary || {};
   const detail = active ? "Reading evidence and preparing an answer."
-    : finished.has(row.status) ? (summary.record_count != null
+    : answered(row.status) ? (summary.record_count != null
       ? `${Number(summary.record_count) || 0} records returned; ${Number(summary.citation_count) || 0} citations; ${Number(summary.unresolved_count) || 0} unresolved items.` : "Answer saved.")
     : blockers.length ? `Waiting for ${blockers.join(", ")}.` : "";
   return taskRow(row.parent_label || "Skill specialist", skillLabel(row), state, detail, active);
@@ -56,22 +58,25 @@ export function activityMarkup(data, projectId = "") {
   if (running(data.envelope) && !activeSkills.length) active.push(taskRow("Skill workflow", "Review room names and site", "Working",
     "Preparing evidence or checking returned answers.", true));
   if (running(data.supervisor)) {
-    active.push(taskRow("Supervisor", "Check the empty-room model", "Working",
+    active.push(taskRow("Supervisor", "Check the building model", "Working",
       data.supervisor.step_label || "Reviewing the model for missing evidence and contradictions.", true));
     active.push(...investigations.map((row) => taskRow("Specialist investigation", row.label || "Drawing check", "Assigned; awaiting answer",
       row.message || (row.pages?.length ? `Pages ${row.pages.join(", ")}` : "Checking drawing evidence."), true)));
   }
-  if (running(data.calculation)) active.push(taskRow("Calculation engine", "Calculate empty-room loads", "Working",
+  if (running(data.calculation)) active.push(taskRow("Calculation engine", "Calculate the building loads", "Working",
     "Calculating from the saved, checked room inputs.", true));
-  const completed = skills.filter((row) => finished.has(row.status)).length;
+  const completed = skills.filter((row) => answered(row.status)).length;
+  const outOfDate = skills.filter((row) => row.status === "stale").length;
+  const skillsSummary = `AI checks: ${completed} of ${skills.length} finished`
+    + (outOfDate ? ` · ${outOfDate === completed ? "earlier answers" : `${outOfDate} earlier ${outOfDate === 1 ? "answer" : "answers"}`} kept, out of date` : "");
   const recent = data.supervisor?.recent_activity || [];
   return `<h3>AI activity</h3>
     <p class="job-caption">Actual workflow tasks and saved answers. Updates every five seconds.</p>
     ${data.refreshProblem ? '<p class="job-note" role="status">Refresh unavailable. Showing the last confirmed activity.</p>' : ""}
     <ul class="job-activity-list" aria-label="Current AI activity">${active.join("") || '<li class="job-caption">No active tasks reported. See the progress steps for completion or blockers.</li>'}</ul>
-    ${skills.length ? `<details data-activity-details="skills" ${open.has("skills") ? "open" : ""}><summary>Skill tasks: ${completed} of ${skills.length} finished</summary>
+    ${skills.length ? `<details data-activity-details="skills" ${open.has("skills") ? "open" : ""}><summary>${escapeHtml(skillsSummary)}</summary>
       <ul class="job-activity-list">${skills.map((row) => skillRow(row, running(data.envelope), skills)).join("")}</ul></details>` : ""}
-    ${recent.length ? `<details data-activity-details="recent" ${open.has("recent") ? "open" : ""}><summary>Recent specialist answers</summary>
+    ${recent.length ? `<details data-activity-details="recent" ${open.has("recent") ? "open" : ""}><summary>Latest AI answers</summary>
       <ul class="job-activity-list">${recent.map((row) => taskRow("Specialist", row.label, textState(row.status), row.cycle ? `Investigation cycle ${row.cycle}.` : "")).join("")}</ul></details>` : ""}`;
 }
 

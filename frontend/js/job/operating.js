@@ -110,12 +110,12 @@ function roomCard(room, plan, model) {
         .join("")}</ul>`
     : `<p class="job-muted">Equipment will appear here when it is found in the drawings.</p>`;
   return `<details class="job-operating-room" ${room.room_id === plan.rooms?.find((item) => item.kind !== "refrigeration")?.room_id ? "open" : ""}>
-    <summary><b>${escapeHtml(room.name)}</b><span>${room.area_m2 == null ? "Area not available" : `${fmt(room.area_m2)} m²`}</span><span>Phase 1 ${escapeHtml(phase1)}</span><span>Phase 2 adds ${escapeHtml(adds)}</span></summary>
+    <summary><b>${escapeHtml(room.name)}</b><span>${room.area_m2 == null ? "Area not available" : `${fmt(room.area_m2)} m²`}</span><span>Building ${escapeHtml(phase1)}</span><span>People and equipment add ${escapeHtml(adds)}</span></summary>
     <div class="job-operating-detail">
       <h2>${escapeHtml(room.name)}</h2>
       <p class="job-room-use">${escapeHtml(roomUse(room))}</p>
       <div class="job-key-facts">
-        <div><span>Empty-room load</span><strong>${escapeHtml(phase1)}</strong></div>
+        <div><span>Building load</span><strong>${escapeHtml(phase1)}</strong></div>
         <div><span>Operating loads</span><strong>${escapeHtml(adds)}</strong></div>
         <div><span>Room total</span><strong>${escapeHtml(roomTotal)}</strong></div>
       </div>
@@ -131,7 +131,7 @@ function roomCard(room, plan, model) {
 }
 
 function roomUse(room) {
-  return room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room";
+  return room.kind === "refrigeration" ? "Refrigeration" : "Cooled room";
 }
 
 function scheduleEditor(schedule) {

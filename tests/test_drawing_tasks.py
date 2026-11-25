@@ -10,6 +10,27 @@ import unittest
 from unittest.mock import patch
 
 from backend import ai_provider, autonomous_tasks_service as tasks_service, drawing_tasks_service as drawing
+from ai import autonomous_tasks as validators
+
+
+class CornerRetryFeedbackTests(unittest.TestCase):
+    def test_small_corner_outline_reports_coverage_and_missing_side_to_retry(self):
+        packet = {"room": "Corridor", "corners": [[0, 0], [40, 0], [40, 20], [0, 20], [100, 0], [100, 20]],
+                  "sketch": [[0, 0], [100, 0], [100, 20], [0, 20]], "sketch_area_px": 2000}
+        with self.assertRaises(ValueError) as refused:
+            validators.validate_p0_outline_corners(packet, json.dumps({"corners": [1, 2, 3, 4]}))
+        reason = str(refused.exception)
+        self.assertIn("40% of the sketched area", reason)
+        self.assertIn("right of the sketch", reason)
+        self.assertIn("near corners 2, 3", reason)
+        record = {"prompt": "Pick corners", "reply_attempts": [{"outcome": "rejected", "reason": reason}]}
+        self.assertIn(reason, drawing._prompt(record))
+
+    def test_minimum_area_without_sketch_reports_percentage(self):
+        from ai import room_outline
+        with self.assertRaisesRegex(ValueError, "40% of the minimum area"):
+            room_outline.validate_corner_outline_reply({"corners": [1, 2, 3, 4]},
+                [[0, 0], [20, 0], [20, 20], [0, 20]], None, "Dining", min_area=1000)
 
 
 class FakeTasks:
@@ -285,6 +306,20 @@ class DrawingTaskTests(unittest.TestCase):
             self.assertTrue(all(json.loads(path.read_text())["raw_reply"] == "[]" for path in archives))
             self.assertTrue(all(call.args[2]["action"] == "run_all" for call in publish.call_args_list))
 
+    def test_a_scale_fallback_is_listed_in_plain_words_even_from_an_older_record(self):
+        old = {"task": "P0_scale_read", "target": "page-9", "status": "not_needed", "applied_value": {"fallback_required": True},
+               "block_reason": "Not usable (Return a readable scale notation or scale bar, or null so the standard-object "
+                               "estimate can be used.); the next way of finding the scale is used."}
+        withdrawn = {"task": "P0_tenancy_outline", "target": "page-20", "status": "not_needed", "block_reason": "Every room has an outline."}
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(drawing._JOB, "status", return_value={"status": "done"}), \
+                    patch.object(tasks_service, "_all_current", return_value=[old, withdrawn]):
+                rows = drawing.status(None, {"id": "j", "review_dir": folder})["not_needed_tasks"]
+        self.assertEqual(rows[0], {"task": "P0_scale_read", "target": "page-9", "status": "not_needed", "fallback": True,
+                                   "label": "Reading the printed scale",
+                                   "reason": "No readable scale on page 9; the scale is found another way."})
+        self.assertEqual((rows[1]["fallback"], rows[1]["reason"]), (False, "Every room has an outline."))
+
     def test_status_reconciles_later_repairs_without_rewriting_history(self):
         from copy import deepcopy
         with tempfile.TemporaryDirectory() as folder:
@@ -299,6 +334,22 @@ class DrawingTaskTests(unittest.TestCase):
                         "reply_attempts": [{"outcome": "rejected", "reason": "Invalid JSON"}]}):
                 self.assertEqual(drawing.status(None, project)["unresolved"][0]["kind"], "answer_rejected")
             self.assertEqual(original["unresolved"][0]["kind"], "service_error")
+
+    def test_waiting_follow_up_is_neutral_while_supervisor_runs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = {"id": "j", "review_dir": folder}
+            (Path(folder) / "phase1_supervisor_job.json").write_text('{"status":"running"}')
+            with patch.object(drawing._JOB, "status", return_value={"status": "done"}), \
+                    patch.object(drawing, "_waiting", return_value=[{"task": "P8_glazing_certificate", "target": "page-3"}]):
+                state = drawing.status(None, project)
+            self.assertEqual((state["waiting_tasks"], state["follow_up_sender"]), (1, "model check"))
+            self.assertNotIn("recovery", state)
+            (Path(folder) / "phase1_supervisor_job.json").write_text('{"status":"running","provider_limited":true}')
+            with patch.object(drawing._JOB, "status", return_value={"status": "done"}):
+                limited = drawing.status(None, project)
+            self.assertTrue(limited["provider_limited"])
+            self.assertIn("retry after the limit resets", limited["warning"])
+            self.assertNotIn("follow_up_sender", limited)
 
     def test_grid_coordinates_become_image_pixels_by_the_image_or_the_chosen_crop(self):
         # Gemini read a 1,536 x 1,469 plan on a 0-1000 grid: the Kitchen's corner (480, 217) is pixel (737.3, 318.8).

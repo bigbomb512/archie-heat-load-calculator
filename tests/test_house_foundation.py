@@ -25,6 +25,13 @@ class HouseFoundationTests(unittest.TestCase):
         for label, category in expected.items():
             self.assertEqual(room_use_resolution._house_label_matches(label), [category], label)
 
+    def test_site_works_on_the_plan_are_outdoor_not_cooled_rooms(self):
+        """A driveway or boundary fence read as a room was counted as cooled (about 23 kW on one house)."""
+        for label in ("Driveway", "Timber Fence BDY m", "Back yard", "Rear garden", "Paving", "Landscaping", "BBQ area", "Path"):
+            self.assertEqual(room_use_resolution._house_label_matches(label), ["outdoor"], label)
+        for label in ("Garden room", "Garden flat", "Pathology", "Bedroom 1"):
+            self.assertNotEqual(room_use_resolution._house_label_matches(label), ["outdoor"], label)
+
     def test_all_named_house_set_uses_are_one_category_when_in_scope(self):
         data = json.loads(SCAN.read_text())["cases"]
         labels = {label for case in data.values() for label in case.get("rooms", {})}

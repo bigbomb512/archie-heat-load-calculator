@@ -231,9 +231,10 @@ def _gather(root, source, room_use):
     totals=[row for row in totals if row["priority"]==priorities[(row["level"],row["room"])]]
     drawings, page_counts = {}, []
     if source and Path(source).exists():
-        import pdfplumber
+        from backend import pdf_page_text_cache
         version=_pdf_version(source)
-        with pdfplumber.open(source) as doc:
+        text=pdf_page_text_cache.PdfText(root,source)   # page words, read once per PDF and page
+        with pdf_page_text_cache.shared_document(source) as doc:
             for target,traced in sorted(by_page.items()):
                 system=systems.get(target,{})
                 scales=[t.get("calibration",{}).get("mm_per_px") for t in traced if t.get("calibration",{}).get("status") in {"agreed","confirmed","reviewer_confirmed"}]
@@ -255,7 +256,7 @@ def _gather(root, source, room_use):
                     registration=None
                     if number!=target:
                         if abs(sheet.width-target_page.width)>1 or abs(sheet.height-target_page.height)>1:continue
-                        registration=plan_text_translation(_words(sheet),_words(target_page))
+                        registration=plan_text_translation(text.words(number),text.words(target))
                         if not registration:
                             warnings.append({"page":number,"reason":"Furniture/layout plan could not be registered; seats not counted."});continue
                     if sheet.images:

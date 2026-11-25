@@ -1,0 +1,115 @@
+{
+  "description": "The alternatives the assumption range runs for each fact the drawings don't settle (backend/assumption_range_service.py). Each case is one full calculation with that one input changed. Wall and roof cases are rows of the imported AIRAH handbook table (ai/construction_u_values.py): the row's U-value with its name as the description, as a typed answer is saved. The name also picks the construction's thermal mass in the hourly model (config/stored_heat.json construction_words), so a brick veneer case is modelled as brick, not as the default lightweight wall. Edit this file to change what is tried.",
+  "unknowns": [
+    {
+      "key": "windows",
+      "label": "Window glass",
+      "assumed": "The NatHERS default window (aluminium single clear, U 6.7, SHGC 0.57 hinged or 0.70 fixed/sliding): the worst common case, so the load errs high.",
+      "question": "What glazing is specified for the windows and glass doors? A U-value and SHGC for each window type, the window schedule, or the NatHERS certificate's window table.",
+      "answer_kind": "glazing",
+      "cases": [
+        {
+          "id": "double_low_e",
+          "label": "Double-glazed low-e (U 2.9, SHGC 0.40)",
+          "basis": "Illustrative double-glazed low-e window; replace with the window's WERS rating once known.",
+          "change": {
+            "kind": "glazing",
+            "u_value_w_m2k": 2.9,
+            "shgc": 0.4,
+            "label": "Double-glazed low-e (what-if)"
+          }
+        },
+        {
+          "id": "single_tinted",
+          "label": "Single tinted (U 6.0, SHGC 0.45)",
+          "basis": "Illustrative single tinted window.",
+          "change": {
+            "kind": "glazing",
+            "u_value_w_m2k": 6.0,
+            "shgc": 0.45,
+            "label": "Single tinted (what-if)"
+          }
+        }
+      ]
+    },
+    {
+      "key": "wall",
+      "label": "External wall construction",
+      "assumed": "The preliminary wall U-value from the assumption pack.",
+      "question": "What are the external walls made of, and how are they insulated? (For example brick veneer with R2.5 batts, cavity brick, lightweight cladding.)",
+      "answer_kind": "construction",
+      "cases": [
+        {
+          "id": "cavity_brick_insulated",
+          "label": "Insulated cavity brick (U 0.5)",
+          "change": {
+            "kind": "construction",
+            "surface": "wall",
+            "u_value_w_m2k": 0.5,
+            "label": "Cavity brick with indoor plaster (with plaster, urea formaldehyde in cavity)"
+          },
+          "basis": "U-value of the AIRAH handbook's \"Cavity brick with indoor plaster (with plaster, urea formaldehyde in cavity)\" (masonry-walls:cavity-brick-with-indoor-plaster-with-plaster-urea-formaldehyde-in-cavity), typed in."
+        },
+        {
+          "id": "brick_veneer_uninsulated",
+          "label": "Uninsulated brick veneer (U 1.9)",
+          "change": {
+            "kind": "construction",
+            "surface": "wall",
+            "u_value_w_m2k": 1.9,
+            "label": "Brick Veneer"
+          },
+          "basis": "U-value of the AIRAH handbook's \"Brick Veneer\" (frame-walls:brick-veneer), typed in."
+        }
+      ]
+    },
+    {
+      "key": "roof",
+      "label": "Roof and ceiling insulation",
+      "assumed": "The preliminary roof U-value from the assumption pack.",
+      "question": "What is the roof construction and the ceiling insulation (R-value), and is there sarking or foil under the roof?",
+      "answer_kind": "construction",
+      "cases": [
+        {
+          "id": "tiled_rfl_r2",
+          "label": "Tiled roof, foil and R2 batts (U 0.27)",
+          "change": {
+            "kind": "construction",
+            "surface": "roof",
+            "u_value_w_m2k": 0.27,
+            "label": "Tiled roof, RFL, R2 bulk insulation, gypsum board"
+          },
+          "basis": "U-value of the AIRAH handbook's \"Tiled roof, RFL, R2 bulk insulation, gypsum board\" (pitched-roofs:tiled-roof-rfl-r2-bulk-insulation-gypsum-board), typed in."
+        },
+        {
+          "id": "tiled_uninsulated",
+          "label": "Tiled roof, no insulation (U 1.32)",
+          "change": {
+            "kind": "construction",
+            "surface": "roof",
+            "u_value_w_m2k": 1.32,
+            "label": "Tiled roof, gypsum board"
+          },
+          "basis": "U-value of the AIRAH handbook's \"Tiled roof, gypsum board\" (pitched-roofs:tiled-roof-gypsum-board), typed in."
+        }
+      ]
+    },
+    {
+      "key": "north",
+      "label": "True north",
+      "assumed": "North as the AI read it from the drawings.",
+      "question": "Which way is true north on the floor plans? A site plan or survey with a north point is enough.",
+      "answer_kind": "north",
+      "cases": [
+        {
+          "id": "north_reversed",
+          "label": "North arrow read the wrong way round (180\u00b0)",
+          "change": {
+            "kind": "north",
+            "rotate_deg": 180
+          }
+        }
+      ]
+    }
+  ]
+}

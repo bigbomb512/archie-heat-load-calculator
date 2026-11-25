@@ -137,6 +137,8 @@ async function preview(page, overrides = {}) {
   if (overrides.final_report) currentPlan.final_report = overrides.final_report;
   if (overrides.phase1_report) currentPlan.phase1_report = overrides.phase1_report;
   if (overrides.rooms) currentPlan.rooms = overrides.rooms;
+  if (overrides.pages) currentPlan.pages = overrides.pages;
+  if (overrides.outlines) currentPlan.outlines = overrides.outlines;
   if (overrides.room_use_options) currentPlan.room_use_options = overrides.room_use_options;
   const currentProject = {
     ...project,
@@ -311,9 +313,9 @@ test("preview renders the Drawings frame and current room outline", async ({
   await expect(
     page.getByRole("heading", { name: "Found so far" }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: /Rooms/ })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /Check the house/ })).toHaveAttribute(
     "href",
-    /#\/job\/job-1\/rooms/,
+    /#\/job\/job-1\/house/,
   );
   await expect(
     page.locator(".job-plan polygon[data-room-id=shop]"),
@@ -434,12 +436,17 @@ test("a timed-out drawing call is explained, and finishing redraws the screen on
     { status: "done", step_state: "done", step: "skills", answered: 41, refused: 8, rounds: 5, last_problem: problem },
   ]);
   await expect(page.locator("[data-stage-problem]")).toHaveText(problem);
+  const originalList = await page.locator(".job-stage-list").elementHandle();
   await page.clock.runFor(5000);
   await expect(page.locator('[data-stage="rooms"]')).toHaveClass(/done/);
   await expect.poll(() => counts.plan).toBe(2);
-  await page.clock.runFor(20000);
-  // First load, one refresh, then the redraw's own read; nothing is working any more, so polling stopped.
-  expect(counts.tasks).toBe(3);
+  await expect.poll(() => originalList.evaluate((element) => element.isConnected)).toBe(false);
+  // The redraw also reads the tasks. Wait for that asynchronous read before advancing the clock:
+  // waiting stages intentionally keep polling until Phase 1 completes.
+  await expect.poll(() => counts.tasks).toBe(3);
+  await page.clock.runFor(5000);
+  await expect.poll(() => counts.tasks).toBe(4);
+  expect(counts.plan).toBe(2);
 });
 
 test("polling stops when the person leaves the Drawings screen", async ({ page }) => {
@@ -590,11 +597,24 @@ test("a result missing a room is labelled partial, and assumptions are listed se
       partial_reasons: ["Storage is not counted: no area yet."] },
     supervisor_assumptions: [{ message: "Check what is above Shop; its roof exposure is assumed." }],
   } });
+  // The uncounted rooms come from the job summary, the one count every screen shows.
+  await page.route("**/api/job-summary**", (route) => route.fulfill({ json: {
+    answer: { state: "building_only", headline: "Building-only load", total_kw: 4.2, rooms_counted: 1, rooms_found: 2,
+              rooms_not_counted: [{ room_id: "storage", name: "Storage", why: "needs_area", reason: "needs an area typed in" }],
+              not_counted_text: "1 needs an area" },
+    completeness: { level: "partial", text: "Partial: 1 cooled room isn't counted yet (1 needs an area)." }, todos: [], counts: { total: 0, by_step: {} },
+  } }));
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
   const partial = page.locator("[data-phase1-partial]");
-  await expect(partial.getByRole("heading", { name: "Partial: 1 room not counted" })).toBeVisible();
-  await expect(partial).toContainText("Storage is not counted: no area yet.");
-  await expect(page.locator("[data-result-assumptions]")).toContainText("its roof exposure is assumed");
+  await expect(partial.getByRole("heading", { name: "1 of 2 cooled rooms aren't counted yet" })).toBeVisible();
+  await expect(partial).toContainText("Storage: needs an area typed in");
+  const assumptions = page.locator("[data-result-assumptions] details");
+  await expect(assumptions).not.toHaveAttribute("open");
+  await expect(assumptions.locator("summary")).toHaveText("1 assumption in this result");
+  await expect(assumptions.getByText("its roof exposure is assumed", { exact: false })).toBeHidden();
+  await assumptions.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(assumptions.getByText("its roof exposure is assumed", { exact: false })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(partial).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -608,8 +628,97 @@ test("assumed values alone don't label a result partial", async ({ page }) => {
     supervisor_assumptions: [{ message: "Its ceiling height is assumed." }],
   } });
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
-  await expect(page.locator("[data-result-assumptions]")).toContainText("ceiling height is assumed");
-  await expect(page.locator("[data-phase1-partial]")).toHaveCount(0);
+  await expect(page.locator("[data-result-assumptions] summary")).toHaveText("1 assumption in this result");
+  await expect(page.locator("[data-phase1-partial]")).toBeHidden();
+});
+
+test("assumptions summary counts multiple items while the panel starts closed", async ({ page }) => {
+  await preview(page, { phase1_report: {
+    supervisor_assumptions: Array.from({ length: 8 }, (_, index) => ({ message: `Assumption ${index + 1}` })),
+  } });
+  await page.goto("/?preview=1#/job/job-1/rooms/shop");
+  const assumptions = page.locator("[data-result-assumptions] details");
+  await expect(assumptions.locator("summary")).toHaveText("8 assumptions in this result");
+  await expect(assumptions).not.toHaveAttribute("open");
+  await assumptions.locator("summary").click();
+  await expect(assumptions.locator("li")).toHaveCount(8);
+});
+
+test("room detail stays in view beside a long list on wide screens only", async ({ page }) => {
+  const rooms = Array.from({ length: 24 }, (_, index) => ({
+    ...plan.rooms[0],
+    room_id: `room-${index}`,
+    name: `Room ${index + 1}`,
+  }));
+  await preview(page, { rooms });
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await page.goto("/?preview=1#/job/job-1/rooms/room-0");
+  const detail = page.locator(".job-room-detail");
+  await expect(detail).toBeVisible();
+  await expect.poll(() => detail.evaluate((element) => getComputedStyle(element).position)).toBe("sticky");
+  const wide = await detail.evaluate((element) => ({ height: element.getBoundingClientRect().height, overflow: getComputedStyle(element).overflowY }));
+  expect(wide.height).toBeLessThanOrEqual(652);
+  expect(wide.overflow).toBe("auto");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => detail.evaluate((element) => getComputedStyle(element).position)).toBe("static");
+});
+
+test("each floor keeps cooled rooms visible and collapses clickable non-cooled rooms", async ({ page }) => {
+  const room = (id, name, level, state) => ({
+    ...plan.rooms[0], room_id: id, name, level, state,
+  });
+  await preview(page, { rooms: [
+    room("bed", "Bedroom", "Ground", "done"),
+    room("wardrobe", "Wardrobe", "Ground", "not_cooled"),
+    room("plant", "Plant", "Ground", "left_out"),
+    room("office", "Office", "First", "done"),
+    room("coolroom", "Coolroom", "First", "sized_separately"),
+  ] });
+  await page.goto("/?preview=1#/job/job-1/rooms/bed");
+  const floors = page.locator(".job-floor-rooms");
+  await expect(floors).toHaveCount(2);
+  await expect(floors.nth(0).getByRole("heading", { name: "Rooms on this floor" })).toBeVisible();
+  await expect(floors.nth(0).getByRole("button", { name: "Bedroom" })).toBeVisible();
+  await expect(floors.nth(1).getByRole("button", { name: "Office" })).toBeHidden();
+  const groundClosed = floors.nth(0).locator(".job-not-cooled");
+  await expect(groundClosed.locator("summary")).toHaveText("2 rooms not cooled on this floor");
+  await expect(groundClosed).not.toHaveAttribute("open");
+  await expect(groundClosed.getByRole("button", { name: "Wardrobe" })).toBeHidden();
+  await groundClosed.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(groundClosed.getByRole("button", { name: "Wardrobe" })).toBeVisible();
+  await groundClosed.getByRole("button", { name: "Wardrobe" }).click();
+  await expect(page.locator(".job-room-detail h2")).toHaveText("Wardrobe");
+  await page.getByLabel("Floor", { exact: true }).selectOption("First");
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/office$/);
+  await expect(page.locator(".job-floor-rooms:not([hidden])").getByRole("button", { name: "Office" })).toBeVisible();
+  const firstClosed = page.locator(".job-floor-rooms:not([hidden]) .job-not-cooled");
+  await expect(firstClosed.locator("summary")).toHaveText("1 room not cooled on this floor");
+  await expect(firstClosed).not.toHaveAttribute("open");
+});
+
+test("Rooms shows one floor's plan and table at a time and opens the routed room's floor", async ({ page }) => {
+  const levels = ["Ground", "First", "Second"];
+  const rooms = levels.map((level, index) => ({ ...plan.rooms[0], room_id: `room-${index}`,
+    name: `${level} room`, level, source_pages: [index + 1] }));
+  const pages = levels.map((level, index) => ({ ...plan.pages[0], page: index + 1, level_name: level,
+    title: `${level} plan` }));
+  const outlines = levels.map((level, index) => ({ ...plan.outlines[0], room_id: `room-${index}`,
+    name: `${level} room`, level, page: index + 1 }));
+  await preview(page, { rooms, pages, outlines });
+  await page.goto("/?preview=1#/job/job-1/rooms/room-2");
+  const floor = page.getByLabel("Floor", { exact: true });
+  await expect(floor).toHaveValue("Second");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-plan-page")).toHaveCount(1);
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-plan-page")).toContainText("Second");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-room-select")).toHaveText("Second room");
+  await expect(page.locator(".job-floor-rooms[hidden]")).toHaveCount(2);
+  // A native <select>: its keyboard behaviour is the platform's (arrow keys open the list on macOS), so choose directly.
+  await floor.selectOption("Ground");
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/room-0$/);
+  await expect(page.getByLabel("Floor", { exact: true })).toHaveValue("Ground");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-plan-page")).toContainText("Ground");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-room-select")).toHaveText("Ground room");
 });
 
 test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {
@@ -679,7 +788,7 @@ test("after the review finishes the page waits for the server's Phase 1 start an
   ]);
   const calculation = page.locator('[data-stage="calculation"]');
   await expect(calculation).toHaveClass(/active/);
-  await expect(calculation).toContainText("Starting the empty-room load calculation.");
+  await expect(calculation).toContainText("Starting the building load calculation.");
   await page.clock.runFor(5000);
   await expect(calculation).toContainText("Calculating the room load");
   expect(seen.posts).toEqual([]);
@@ -776,7 +885,7 @@ test("an out-of-date Phase 1 result says it is redone after the review, not that
 }) => {
   await reviewFinished(page, [{ status: "done", step_state: "done", phase: "phase1_base_room" }]);
   const calculation = page.locator('[data-stage="calculation"]');
-  await expect(calculation).toContainText("The empty-room load is recalculated when the drawing review finishes.");
+  await expect(calculation).toContainText("The building load is recalculated when the drawing review finishes.");
   await expect(page.getByText("on Results")).toHaveCount(0);
 });
 
@@ -886,13 +995,13 @@ test("ceiling height uses the existing override and wall edits use envelope clas
     .first()
     .click();
   await page.getByLabel("Ceiling height in metres").fill("3.2");
-  await page.getByRole("button", { name: "Save and update Phase 1" }).click();
+  await page.getByRole("button", { name: "Save and update the load" }).click();
   await expect.poll(() => height?.ceiling_height_mm).toBe(3200);
   await expect.poll(() => calculationCount).toBe(1);
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
   await page.getByRole("button", { name: "Change a wall or the roof" }).click();
   await page.locator("select[name='edge-0']").selectOption("mall");
-  await page.getByRole("button", { name: "Save and update Phase 1" }).click();
+  await page.getByRole("button", { name: "Save and update the load" }).click();
   await expect.poll(() => classification?.edges?.[0]?.boundary).toBe("mall");
   await expect.poll(() => calculationCount).toBe(2);
 });
@@ -1019,7 +1128,7 @@ test("current Results show the total, room bars and assumptions", async ({
   );
   await page.goto("/?preview=1#/job/job-1/results");
   await expect(
-    page.getByRole("heading", { name: "Design cooling load for the tenancy" }),
+    page.getByRole("heading", { name: "Preliminary cooling load for the tenancy" }),
   ).toBeVisible();
   await expect(page.locator(".job-total")).toContainText("4.2");
   await expect(page.locator(".job-stacked-bar")).toHaveAttribute(
@@ -1228,10 +1337,13 @@ test("locked Results are not keyboard links and the preview fits 375 pixels", as
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/?preview=1#/job/job-1/drawings");
   await expect(
-    page.locator(".job-step.locked").filter({ hasText: "Results" }),
+    page.locator(".job-step.locked").filter({ hasText: "Load and report" }),
   ).toHaveCount(1);
   await expect(
-    page.locator(".job-step.locked").filter({ hasText: "Results" }),
+    page.locator(".job-step.locked").filter({ hasText: "Load and report" }),
+  ).not.toHaveAttribute("href", /.*/);
+  await expect(
+    page.locator(".job-step.locked").filter({ hasText: "Design the system" }),
   ).not.toHaveAttribute("href", /.*/);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
@@ -1456,7 +1568,7 @@ test("every documented room state is distinct and Needs you contains only action
     ).toContainText(state);
   }
   const needs = page.locator(".job-needs li");
-  await expect(page.locator(".job-needs h2")).toHaveText("2 things need you");
+  await expect(page.locator(".job-needs h2")).toHaveText("2 rooms need you");
   await expect(needs).toHaveCount(2);
   await expect(page.locator(".job-needs")).not.toContainText("Area room");
   await expect(page.locator(".job-needs")).not.toContainText("Surface room");
@@ -1471,7 +1583,7 @@ test("Phase 1 completion controls the Drawings calculation check and failure cop
   await page.goto(`/?preview=1#/job/${fixture.status.id}/drawings`);
   const calc = page
     .locator(".job-stage")
-    .filter({ hasText: "Calculate each room’s empty-room load" });
+    .filter({ hasText: "Calculate each room’s building load" });
   await expect(calc).not.toHaveClass(/done/);
   await page.route("**/api/skill-workflow**", (route) =>
     route.fulfill({
@@ -1689,7 +1801,7 @@ test("live activity shows parallel specialists, skill results and retains disclo
   await expect(activity.getByText("Check Shop glass on page 26")).toBeVisible();
   await expect(activity.getByText("Check Kitchen roof on page 22")).toBeVisible();
   await expect(activity).not.toContainText("People loads");
-  await activity.getByText("Skill tasks: 1 of 3 finished").click();
+  await activity.getByText("AI checks: 1 of 3 finished").click();
   await expect(activity).toContainText("38 records returned; 38 citations");
   await expect(activity).toContainText("Waiting for Room use");
   await page.clock.runFor(5000);
@@ -1703,7 +1815,7 @@ test("live activity shows parallel specialists, skill results and retains disclo
   await page.clock.runFor(5000);
   await expect(activity.getByText("Check Shop glass on page 26")).toHaveCount(0);
   await expect(activity.locator('[data-activity-details="skills"]')).toHaveAttribute("open", "");
-  await activity.getByText("Recent specialist answers").click();
+  await activity.getByText("Latest AI answers").click();
   await expect(activity).toContainText("Answer applied");
   await page.screenshot({ path: "test-results/live-ai-activity.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1755,4 +1867,105 @@ test("room occupants show the seating source and fallback rationale", async ({ p
   await expect(page.locator("[data-room-occupancy]")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/room-seating-mobile.png", fullPage: true });
+});
+
+// Turramurra (2026-11-18): stage honesty on the Drawings screen.
+async function finishedStages(page) {
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }));
+  await page.route("**/api/page-extraction**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", findings: [] } }));
+  await page.route("**/api/job-calculation**", (route) => route.fulfill({ json: {
+    status: "waiting", step_state: "waiting", readiness: { ready: false, reasons: ["Waiting for drawing review."] } } }));
+}
+
+test("a model check stopped at its cycle limit is not ticked, groups its gaps and says what changed", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await preview(page, { status: { stage: "drawings" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 45 } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review", step_state: "done" } }));
+  const gap = (room, kind, message, pages) => ({ room, kind, message, pages, attempts: 2 });
+  await page.route("**/api/phase1-supervisor**", (route) => route.fulfill({ json: {
+    status: "done", step_state: "done", outcome: "partial_draft", stop_reason: "cycle_limit", stopped_at_limit: true,
+    cycle: 3, max_cycles: 3, gaps_found: 56, gaps_fixed: 9, gaps_remaining: 5, spend: { cost_usd: 0.0514 },
+    area_changes: [{ room: "Store", before_m2: 7.8, after_m2: 5.8 }],
+    exceptions: [
+      gap("Storage", "roof", "Check what is above Storage; its roof or ceiling exposure is unknown or assumed.", [9, 25]),
+      gap("Storage", "roof", "Check what is above Storage; its roof or ceiling exposure is unknown or assumed.", [1, 2]),
+      gap("Storage", "unknown_walls", "Check what is on the other side of Storage's unknown walls.", [9, 25]),
+      gap("Store", "room_use", "Check how Store is used.", [25]),
+      gap("Kitchen", "room_area", "Check Kitchen's outline and area.", [8]),
+    ],
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="supervisor"]');
+  await expect(stage).toHaveClass(/attention/);
+  await expect(stage).not.toHaveClass(/done/);
+  await expect(stage.locator(".job-stage-icon")).toHaveText("!");
+  await expect(stage).toContainText("stopped at its limit of 3 investigation cycles with 4 gaps still open");
+  await expect(stage).not.toContainText("The model checks are finished");
+  await expect(stage.locator("[data-next-step]")).toHaveAttribute("href", "#/job/job-1/fix");
+  await expect(stage.locator("[data-area-changes]")).toHaveText("Store area updated 7.8 → 5.8 m² by the model check.");
+  const details = stage.locator("[data-supervisor-exceptions]");
+  await expect(details.locator("summary")).toHaveText("4 gaps left in 3 rooms");
+  await expect(details.locator("li")).toHaveCount(3);
+  await expect(details.locator("li").first()).toHaveText("Storage: what is above; what its unknown walls face (pages 1, 2, 9, 25)");
+  await expect(details.locator("li").first()).toBeHidden();
+  await details.locator("summary").click();
+  await expect(details.locator("li").first()).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/supervisor-cycle-limit-mobile.png", fullPage: true });
+  expect(errors).toEqual([]);
+});
+
+test("traced rooms with a question waiting to be sent need action, and a scale fallback reads plainly", async ({ page }) => {
+  await preview(page, { status: { stage: "drawings" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: {
+    status: "done", step_state: "done", answered: 45, waiting_tasks: 1,
+    recovery: { action: "resume", label: "Check and resume", reason: "1 drawing question added after the last run is waiting to be sent." },
+    not_needed_tasks: [{ task: "P0_scale_read", target: "page-9", status: "not_needed", fallback: true,
+      label: "Reading the printed scale", reason: "No readable scale on page 9; the scale is found another way." }],
+  } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review", step_state: "done" } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="rooms"]');
+  await expect(stage).toHaveClass(/attention/);
+  await expect(stage.locator(".job-stage-icon")).not.toHaveText("✓");
+  await expect(stage.getByRole("button", { name: "Check and resume" })).toBeEnabled();
+  await expect(stage.locator("[data-task-not-needed]")).toHaveText("Reading the printed scale: No readable scale on page 9; the scale is found another way.");
+  await expect(stage).not.toContainText("Not usable");
+  await expect(page.locator(".job-status")).toContainText("waiting to be sent");
+});
+
+test("a follow-up drawing question is neutral while the model check is sending it", async ({ page }) => {
+  await preview(page, { status: { stage: "phase1" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: {
+    status: "done", step_state: "done", waiting_tasks: 1, follow_up_sender: "model check",
+  } }));
+  await page.route("**/api/phase1-supervisor**", (route) => route.fulfill({ json: {
+    status: "running", step_state: "active", step_label: "Checking the empty-room model",
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="rooms"]');
+  await expect(stage).not.toHaveClass(/attention/);
+  await expect(stage).toContainText("1 follow-up drawing question will be sent by the model check.");
+  await expect(stage).not.toContainText("Needs your action");
+});
+
+test("out-of-date skill answers count as finished, with the earlier answers kept", async ({ page }) => {
+  await preview(page, { status: { stage: "drawings" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 45 } }));
+  const skill = (id) => ({ id, label: id, parent_label: "Drawing set", status: "stale", summary: {} });
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: {
+    status: "stale", step_state: "waiting", recovery: { action: "resume", label: "Try again" },
+    subskills: ["sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction", "address_confirmation", "room_identity_use"].map(skill),
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  await expect(page.locator("[data-ai-activity]")).toContainText("AI checks: 6 of 6 finished · earlier answers kept, out of date");
 });

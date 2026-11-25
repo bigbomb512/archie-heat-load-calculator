@@ -8,6 +8,14 @@ const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 const stepOf = (data) => String(data?.step_state || "waiting");
 const working = (data) => ["active", "stopping"].includes(stepOf(data));
 const stopped = (data) => stepOf(data) === "failed";
+// Finished, but something is left for the person: drawing questions nobody has sent, or a model check that stopped
+// at its limit with gaps remaining. Such a step never shows the done tick.
+const queuedQuestions = (data) => Number(data?.waiting_tasks) || 0;
+const stoppedAtLimit = (data) => Boolean(data?.stopped_at_limit) && stepOf(data) === "done";
+const needsAction = (data, kind) =>
+  kind === "rooms" ? stateOf(data) === "done" && queuedQuestions(data) > 0 && !data?.follow_up_sender
+    : kind === "supervisor" ? stoppedAtLimit(data) : false;
+const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 function stateOf(data) {
   if (data?.status === "not_needed") return "done";
@@ -91,6 +99,10 @@ function envelopeFailureLine(data) {
 
 function stageLine(data, kind, status, plan) {
   if (stepOf(data) === "stopping") return data.recovery?.reason || "Waiting for the current AI request to finish or time out, then resuming unfinished work.";
+  if (kind === "rooms" && data?.follow_up_sender && queuedQuestions(data)) {
+    const count = queuedQuestions(data);
+    return `${plural(count, "follow-up drawing question")} will be sent by the ${data.follow_up_sender}.`;
+  }
   if (kind !== "calculation" && data?.recovery?.label === "Check and resume" && data?.recovery?.reason && !working(data)) return data.recovery.reason;
   if (kind === "pages") {
     if (stopped(data)) {
@@ -122,11 +134,11 @@ function stageLine(data, kind, status, plan) {
     const stillFinding = (plan.rooms || []).filter(
       (room) => room.state === "finding_area",
     );
-    const names = traced.map((room) => room.name);
+    const names = traced.map((room) => room.display_name || room.name);
     if (names.length) {
       const found = `${names.join(", ")} traced.`;
       return stillFinding.length
-        ? `${found} Working out the area of ${stillFinding.map((room) => room.name).join(", ")}.`
+        ? `${found} Working out the area of ${stillFinding.map((room) => room.display_name || room.name).join(", ")}.`
         : found;
     }
     return stepOf(data) === "done"
@@ -149,11 +161,12 @@ function stageLine(data, kind, status, plan) {
       : "Reviewing room names and site details.";
   }
   if (kind === "supervisor") {
-    const copy = working(data) ? data.step_label || "Checking the empty-room model."
+    if (stoppedAtLimit(data)) return supervisorLimitLine(data);
+    const copy = working(data) ? data.step_label || "Checking the building model."
       : stepOf(data) === "done" ? data.outcome === "needs_information"
         ? "The model checks finished, but no cooled room has enough supported inputs yet. See the remaining exceptions."
         : "The model checks are finished; remaining uncertainties are listed with the result."
-      : stopped(data) ? "Checking the empty-room model stopped. Resume to keep the saved answers."
+      : stopped(data) ? "Checking the building model stopped. Resume to keep the saved answers."
       : data?.recovery?.reason || "Starts after the room and site review.";
     const cycle = Number(data?.cycle) || 0;
     const gaps = `${Number(data?.gaps_found) || 0} gaps found · ${Number(data?.gaps_fixed) || 0} fixed`;
@@ -163,7 +176,7 @@ function stageLine(data, kind, status, plan) {
   }
   if (kind === "calculation") {
     const partial = plan.phase1_report?.phase1_coverage?.partial_label;
-    if (status.phase1_complete) return partial ? `Saved empty-room loads are available. ${partial}.` : "Saved empty-room loads are available.";
+    if (status.phase1_complete) return partial ? `Saved building loads are available. ${partial}.` : "Saved building loads are available.";
     const reportReason = plan.phase1_report?.blocked_reasons?.[0];
     const leftOut = plan.phase1_report?.phase1_coverage?.rooms_left_out || [];
     if (reportReason) return String(reportReason);
@@ -171,23 +184,106 @@ function stageLine(data, kind, status, plan) {
       return `Calculated with ${leftOut.map((room) => room.label || room.name).join(", ")} left out.`;
     }
     if (working(data)) {
-      return data?.step_label || "Calculating each room’s empty-room load.";
+      return data?.step_label || "Calculating each room’s building load.";
     }
     if (data?.offerStart) {
-      return "The empty-room load hasn't started. Calculate now runs it from the saved drawing evidence.";
+      return "The building load hasn't started. Calculate now runs it from the saved drawing evidence.";
     }
-    if (data?.readiness?.ready && stepOf(data) !== "done" && !stopped(data)) return "Starting the empty-room load calculation.";
+    if (data?.readiness?.ready && stepOf(data) !== "done" && !stopped(data)) return "Starting the building load calculation.";
     if (data?.readiness?.reasons?.length) return data.readiness.reasons.join(" ");
     if (stopped(data)) {
-      return data?.error || data?.problem || "The empty-room load calculation stopped. Try again to continue.";
+      return data?.error || data?.problem || "The building load calculation stopped. Try again to continue.";
     }
     if (stepOf(data) === "done") {
-      return "The drawings changed since the last calculation. The empty-room load is recalculated when the drawing review finishes.";
+      return "The drawings changed since the last calculation. The building load is recalculated when the drawing review finishes.";
     }
     return "Starts on its own when the drawing review finishes.";
   }
-  if (status.phase1_complete) return "Saved empty-room loads are available.";
-  return "The empty-room load calculation has not started yet.";
+  if (status.phase1_complete) return "Saved building loads are available.";
+  return "The building load calculation has not started yet.";
+}
+
+const LIMIT_WHY = {
+  cycle_limit: (data) => `It stopped at its limit of ${plural(Number(data.max_cycles) || 3, "investigation cycle")}`,
+  // Runs saved before max_attempts was recorded asked twice.
+  attempt_limit: (data) => `It stopped after asking about each gap ${({ 1: "once", 2: "twice", 3: "three times" })[Number(data.max_attempts) || 2] || `${Number(data.max_attempts)} times`}`,
+  no_progress: () => "It stopped because its last cycle changed nothing",
+};
+
+function supervisorLimitLine(data) {
+  // Counted as listed below (the same check for two rooms of one name is one line), so the two numbers agree.
+  const listed = groupedGaps(data.exceptions).reduce((sum, row) => sum + row.count, 0);
+  const left = listed || Number(data.gaps_remaining) || 0;
+  const why = (LIMIT_WHY[data.stop_reason] || LIMIT_WHY.attempt_limit)(data);
+  const counts = `${Number(data.gaps_found) || 0} gaps found · ${Number(data.gaps_fixed) || 0} fixed`;
+  const price = data.spend ? ` · US$${Number(data.spend.cost_usd || 0).toFixed(4)} spent` : "";
+  return `${why} with ${plural(left, "gap")} still open (${counts}${price}). The building load uses labelled estimates for these until you fix them.`;
+}
+
+// What each kind of gap asks the person to check, worded as something to look at (never as a finding).
+const GAP_KINDS = {
+  room_area: "outline and area", room_use: "how it is used", roof: "what is above",
+  unknown_walls: "what its unknown walls face", unanswered: "a drawing check that wasn't answered",
+  storefront_glass: "the shopfront glass", ceiling_height: "ceiling height",
+  internal_perimeter: "which walls face outside", zero_load: "whether it has an outside wall, roof or glass",
+  zero_tenancy: "whether the tenancy has an outside wall, roof or glass",
+  omitted_room: "why it is missing from the result", missing_room: "floor that no traced room covers",
+};
+
+// The remaining gaps, one line per room with what to check there; exact repeats are dropped.
+export function groupedGaps(rows) {
+  const rooms = new Map();
+  const seen = new Set();
+  for (const row of rows || []) {
+    const room = String(row.room || "Other");
+    const what = GAP_KINDS[row.kind] || String(row.message || "").trim();
+    const key = `${room}|${what}`;
+    if (!what) continue;
+    const entry = rooms.get(room) || { room, checks: [], pages: new Set(), count: 0 };
+    for (const page of row.pages || []) entry.pages.add(page);
+    rooms.set(room, entry);
+    if (seen.has(key)) continue;      // the same check for the same room: listed once, its pages kept
+    seen.add(key);
+    entry.checks.push(what);
+    entry.count += 1;
+  }
+  return [...rooms.values()].sort((a, b) => b.count - a.count || a.room.localeCompare(b.room));
+}
+
+// Disclosures inside the stage list stay open across the five-second redraws.
+const openDetails = new Set();
+let detailsWatched = false;
+function watchDetails() {
+  if (detailsWatched || typeof document === "undefined") return;
+  detailsWatched = true;
+  document.addEventListener("toggle", (event) => {
+    const key = event.target?.dataset?.stageDetails;
+    if (!key) return;
+    if (event.target.open) openDetails.add(key);
+    else openDetails.delete(key);
+  }, true);
+}
+
+function gapsMarkup(data) {
+  const groups = groupedGaps(data?.exceptions);
+  if (!groups.length) return "";
+  const total = groups.reduce((sum, row) => sum + row.count, 0);
+  const key = `${data.recovery_project_id || ""}:gaps`;
+  const pages = (row) => {
+    const list = [...row.pages].sort((a, b) => a - b);
+    return list.length && list.length <= 4 ? ` (page${list.length === 1 ? "" : "s"} ${list.join(", ")})` : "";
+  };
+  return `<details class="job-stage-details" data-stage-details="${escapeHtml(key)}" data-supervisor-exceptions ${openDetails.has(key) ? "open" : ""}>
+    <summary>${escapeHtml(`${plural(total, "gap")} left in ${plural(groups.length, "room")}`)}</summary>
+    <ul class="job-note">${groups.map((row) => `<li><strong>${escapeHtml(row.room)}:</strong> ${escapeHtml(row.checks.join("; "))}${escapeHtml(pages(row))}</li>`).join("")}</ul></details>`;
+}
+
+const m2 = (value) => `${Number(value).toFixed(1)} m²`;
+export function areaChangeLine(changes) {
+  const parts = (changes || []).map((row) => row.before_m2 == null ? `${row.room} area found: ${m2(row.after_m2)}`
+    : row.after_m2 == null ? `${row.room} area removed (was ${m2(row.before_m2)})`
+    : `${row.room} area updated ${Number(row.before_m2).toFixed(1)} → ${m2(row.after_m2)}`);
+  return parts.length ? `${parts.join("; ")} by the model check.` : "";
 }
 
 function stage(title, data, kind, status, plan, retryEndpoint = "") {
@@ -198,8 +294,10 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
         : working(data) || data?.readiness?.ready && !data.offerStart && !stopped(data) && stepOf(data) !== "done"
           ? "active"
           : "waiting"
-      : stateOf(data) === "done" && data?.recovery?.label === "Try again"
-        ? "waiting"
+      : needsAction(data, kind)
+        ? "attention"
+        : stateOf(data) === "done" && data?.recovery?.label === "Try again"
+        ? "unfinished"
         : stateOf(data);
   const copy = stageLine(data, kind, status, plan);
   const startNow = kind === "calculation" && data?.offerStart
@@ -208,17 +306,25 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     ? stopped(data) && data?.readiness?.ready && retryEndpoint
       ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>` : ""
     : recoveryButton(data, retryEndpoint, kind);
-  const exceptions = kind === "supervisor" && data?.exceptions?.length
-    ? `<ul class="job-note" data-supervisor-exceptions>${data.exceptions.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul>` : "";
+  const exceptions = kind === "supervisor" ? gapsMarkup(data) : "";
+  const areaLine = kind === "supervisor" ? areaChangeLine(data?.area_changes) : "";
+  const areaNote = areaLine ? `<p class="job-caption" data-area-changes>${escapeHtml(areaLine)}</p>` : "";
+  const nextStep = kind === "supervisor" && stoppedAtLimit(data) && data.recovery_project_id
+    ? `<a class="job-button secondary" data-next-step href="#/job/${encodeURIComponent(data.recovery_project_id)}/fix">Fix the remaining rooms</a>` : "";
   const problem =
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) =>
-    `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
+  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) => row.fallback
+    ? `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}:</strong> ${escapeHtml(row.reason || "")}</p>`
+    : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
     + (data?.not_answered_tasks || []).map((row) =>
       `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong> The checker refused the AI's reply twice${row.reason ? ` (${escapeHtml(row.reason)})` : ""}; the room keeps the area its other steps found.</p>`).join("") : "";
-  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${notNeeded}${exceptions}${retry}${startNow}</span></li>`;
+  // Finished with parts it couldn't do: marked like a step that needs you, so it doesn't read as not started.
+  const icon = state === "done" ? "✓" : state === "attention" || state === "unfinished" ? "!" : "";
+  const flag = state === "attention" ? `<span class="job-stage-flag">Needs your action</span>`
+    : state === "unfinished" ? `<span class="job-stage-flag">Finished with gaps</span>` : "";
+  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${icon}</span><span><strong>${title}</strong>${flag}<p>${escapeHtml(copy)}</p>${areaNote}${problem}${notNeeded}${exceptions}${retry}${nextStep}${startNow}</span></li>`;
 }
 
 const recoveryNotes = new Map();
@@ -246,7 +352,8 @@ function preparationStage(newJob) {
 }
 
 function facts(status, plan) {
-  const named = [...new Set((plan.rooms || []).map((room) => room.name))];
+  // Each room once: separate rooms of one name are numbered ("Ensuite (1)") and other levels' are shown with their level.
+  const named = [...new Set((plan.rooms || []).map((room) => room.display_name || room.name))];
   const weather =
     status.weather_location ||
     status.weather_ai_pick ||
@@ -259,21 +366,24 @@ function facts(status, plan) {
         ? "Suggested from the site details"
         : "Not identified yet";
   const site = status.address || status.found_site || "Not identified yet";
-  const above =
-    status.above && status.above !== "not_sure"
+  // A house has no tenancy: what is over each room follows from its level (top floor under the roof).
+  const aboveTerm = status.dwelling ? "What is above the rooms" : "Above the tenancy";
+  const above = status.dwelling
+    ? status.above_summary || "Worked out from the floor levels once they are read"
+    : status.above && status.above !== "not_sure"
       ? status.above.replaceAll("_", " ")
       : "Not identified yet";
   return `<dl class="job-facts">
     <div><dt>Site</dt><dd>${escapeHtml(site)}</dd></div>
-    <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}</dd><small class="job-caption">${escapeHtml(weatherWhy)}</small></div>
+    <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}<small class="job-caption">${escapeHtml(weatherWhy)}</small></dd></div>
     <div><dt>Rooms named on the drawings</dt><dd>${escapeHtml(named.length ? named.join(", ") : "Still reading the drawing set")}</dd></div>
-    <div><dt>Above the tenancy</dt><dd>${escapeHtml(above)}</dd></div>
+    <div><dt>${escapeHtml(aboveTerm)}</dt><dd>${escapeHtml(above)}</dd></div>
   </dl>`;
 }
 
 function statusSentence(data, status, plan) {
   if (status.phase1_complete)
-    return "The empty-room loads are ready. Continue when you are.";
+    return "The building loads are ready. Continue to Rooms when you are.";
   const order = [
     ["pages", data.reading],
     ["equipment", data.equipment],
@@ -286,6 +396,7 @@ function statusSentence(data, status, plan) {
   const unfinished = ([kind, value]) => {
     if (kind === "calculation") return !status.phase1_complete;
     if (kind === "rooms" && stateOf(value) === "done" && callFailures(value).length) return true;
+    if (needsAction(value, kind)) return true;
     return value && stateOf(value) !== "done";
   };
   const current =
@@ -300,11 +411,14 @@ function statusSentence(data, status, plan) {
     if (kind === "pages") return pageReadingProblem(value);
     return kind === "envelope"
       ? `${(value.failed_steps || []).map((row) => row.label).join(" and ") || "Working out the walls, roof and floor"} stopped. Try again to continue; finished steps are kept.`
+      : kind === "calculation" ? "The building load calculation stopped. Try again under Calculate each room’s building load."
       : "A drawing step stopped. Try again to continue.";
   }
   const copy = stageLine(value, kind, status, plan);
   if (kind === "pages")
     return `${copy} You can close this page and come back later.`;
+  if (kind === "rooms" && needsAction(value, kind)) return `${copy} Check and resume under Trace the rooms and walls sends it.`;
+  if (kind === "supervisor" && needsAction(value, kind)) return `${copy} Fix the remaining rooms, or continue with the estimates.`;
   if (kind === "rooms") return `${copy} The review keeps going if you leave.`;
   if (kind === "envelope")
     return `${copy} The review keeps going if you leave.`;
@@ -360,8 +474,8 @@ function stagesMarkup(data, status, plan) {
         ${stage("Find equipment", data.equipment, "equipment", status, plan, "/api/page-extraction")}
         ${stage("Trace the rooms and walls", data.rooms, "rooms", status, plan, "/api/drawing-tasks")}
         ${stage("Review room names and site", data.envelope, "envelope", status, plan, "/api/skill-workflow")}
-        ${stage("Check the empty-room model", data.supervisor, "supervisor", status, plan, "/api/phase1-supervisor")}
-        ${stage("Calculate each room’s empty-room load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
+        ${stage("Check the building model", data.supervisor, "supervisor", status, plan, "/api/phase1-supervisor")}
+        ${stage("Calculate each room’s building load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
 }
 
 function sentenceFor(data, status, plan) {
@@ -381,7 +495,7 @@ function sentenceFor(data, status, plan) {
 // Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
 function stageShape(data) {
   const kinds = ["reading", "equipment", "rooms", "envelope", "supervisor", "calculation"];
-  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks, data[kind]?.not_answered_tasks])}:${data[kind]?.offerStart || false}`);
+  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks, data[kind]?.not_answered_tasks, data[kind]?.waiting_tasks, data[kind]?.stopped_at_limit, data[kind]?.area_changes])}:${data[kind]?.offerStart || false}`);
   shape.push(`prep:${stepOf(data.newJob)}`);
   return shape.join("|");
 }
@@ -517,6 +631,7 @@ export async function renderDrawings(project, projectId) {
     statusLine: sentenceFor(data, status, plan),
     plan,
     bind: () => {
+      watchDetails();
       bindActivity(document.querySelector("[data-ai-activity]"), projectId);
       bindStageButtons(projectId, document.querySelector(".job-progress-panel") || document);
       watchStages(projectId, data, status, plan);

@@ -4,6 +4,7 @@ AI kept to a minimum).
 In a dwelling, each window in the window schedule is placed by its tag on the floor plan onto the outside wall it stands
 against (ai.house_windows), and saved on the room trace like the storefront glass (source "drawing_text"). A wall
 the AI hadn't classified that takes a window is taken as facing outside: a window is evidence of an outside wall.
+(A house's walls aren't classified by the AI: an edge not running along another traced room is outside by rule.)
 Windows that can't be placed are listed in house_windows.json with the reason; walls without readable windows are
 left for a later (AI) step.
 """
@@ -11,6 +12,8 @@ import hashlib
 import json
 import math
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 from ai import house_windows
@@ -18,7 +21,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v13"  # v13: entered windows aren't added again (v12) and plan-tag offsets are kept (2026-11-17)
+VERSION = "house-windows-text-v14"  # v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -93,35 +96,68 @@ def _schedule_pages(root):
     return sorted(pages)
 
 
+_FLOWED = OrderedDict()
+_FLOWED_LOCK = threading.Lock()
+
+
+class _OpenedWhenRead:
+    """The PDF, opened only when a page isn't in the caches yet: opening and closing a 30-sheet set took about 4 s each
+    time the windows were placed again, though every page it needed was already read (Turramurra 2026-11-18)."""
+
+    def __init__(self, source):
+        self._source, self._doc = source, None
+
+    @property
+    def pages(self):
+        if self._doc is None:
+            import pdfplumber
+            self._doc = pdfplumber.open(self._source)
+        return self._doc.pages
+
+    def close(self):
+        if self._doc is not None:
+            self._doc.close()
+            self._doc = None
+
+
 def _pdf_pages(source):
     """(close, read) where read(page) -> (width_pt, height_pt, words), parsed once per PDF version (seating's cache)."""
-    import pdfplumber
     from backend import seating_service
-    doc = pdfplumber.open(source)
+    doc = _OpenedWhenRead(source)
     version = seating_service._pdf_version(source)
     def read(number):
         page = seating_service._Page(doc, number, version)
         return page.width, page.height, page.extract_words()
-    flowed = {}
-
     def flow(number):
         """The page's words in the PDF's own text order: a tag drawn letter by letter (set 15's "WG_07") is one word
-        here, where position order splits it; set 15's ground floor had 2 tags read that way, 17 this way (2026-11-15)."""
-        if number not in flowed:
-            flowed[number] = doc.pages[number - 1].extract_words(use_text_flow=True)
-        return flowed[number]
+        here, where position order splits it; set 15's ground floor had 2 tags read that way, 17 this way (2026-11-15).
+        Read once per page of each version of the PDF (the windows are placed again every round of drawing questions;
+        a page took about 4 s on Turramurra, 2026-11-18); callers get their own copies of the words."""
+        key = (*version, number)
+        with _FLOWED_LOCK:
+            words = _FLOWED.get(key)
+            if words is not None:
+                _FLOWED.move_to_end(key)
+        if words is None:
+            words = doc.pages[number - 1].extract_words(use_text_flow=True)
+            with _FLOWED_LOCK:
+                _FLOWED[key] = words
+                while len(_FLOWED) > 16:
+                    _FLOWED.popitem(last=False)
+        return [dict(word) for word in words]
     read.flow = flow
     return doc.close, read
 
 
 def _outside_edges(trace, records, mm_per_px):
-    """Edges classed outside, and unclassified edges that don't run along another traced room."""
+    """Edges classed outside, and unclassified edges that don't run along another traced room (a house's walls aren't
+    classified by the AI: outside by rule). Internal, adjacent and wrong-level edges never host a window."""
     from backend.ai_preliminary_service import _edges_along_other_rooms, _outlines_by_page
     edges = {row.get("index"): row.get("boundary", "unknown") for row in trace.get("edges", []) if isinstance(row, dict)}
     count = len(trace.get("points_image_px", [])) - 1
     unknown = [index for index in range(count) if edges.get(index, "unknown") == "unknown"]
     along = _edges_along_other_rooms({**trace, "trace_id": trace.get("trace_id")}, unknown, _outlines_by_page(records), mm_per_px)
-    return sorted([index for index in range(count) if edges.get(index) == "external"]
+    return sorted([index for index in range(count) if edges.get(index) in {"external", "mall"}]
                   + [index for index in unknown if index not in along])
 
 
@@ -149,7 +185,7 @@ def apply(web, project, root, read_page=None):
     schedule_pages = _schedule_pages(root)
     inputs = {"version": VERSION, "pdf": str(source), "schedule_pages": schedule_pages,
               "plan_levels": plan_levels,
-              "traces": [{key: row.get(key) for key in ("trace_id", "room_id", "page", "points_image_px", "calibration")}
+              "traces": [{key: row.get(key) for key in ("trace_id", "room_id", "page", "points_image_px", "calibration", "edges")}
                          for row in cooled],
               "scopes": scopes, "spatial_fingerprint": _fingerprint(spatial_pages)}
     if source and Path(source).exists():
@@ -157,7 +193,7 @@ def apply(web, project, root, read_page=None):
         inputs["pdf_version"] = [stat.st_size, stat.st_mtime_ns]
     fingerprint = _fingerprint(inputs)
     saved = read_json(root / RESULT_FILE)
-    if saved.get("fingerprint") == fingerprint:
+    if saved.get("version") == VERSION and saved.get("fingerprint") == fingerprint:
         return saved
     result = {"schema_version": 1, "version": VERSION, "fingerprint": fingerprint, "schedule_pages": schedule_pages,
               "windows_in_schedule": 0, "skylights": [], "doors_not_counted": [], "unread_schedule_rows": [],
@@ -222,16 +258,18 @@ def apply(web, project, root, read_page=None):
                 continue
             # Placement runs in image pixels (each room has its own mm per pixel); `scale` stays mm per PDF point for the
             # printed-label step below, whose tags and labels are in PDF points.
-            placed = (house_windows.place_windows(placement_tags, windows, rooms, scale / sx) if rooms
-                      else {"openings": [], "unplaced": []})
+            placed = house_windows.place_windows(placement_tags, windows, rooms, scale / sx)
             result["unplaced"] += placed["unplaced"]
             traced_ids = {trace.get("room_id") for trace in records if trace.get("page") == page}
             labels = _untraced_labels(spatial_pages.get(page, {}), level or plan_levels.get(page) or "Unassigned level", traced_ids)
-            placed_marks = {row["mark"].upper() for row in placed["openings"]}
+            placed_marks = {house_windows.normalized_mark(row["mark"]) for row in placed["openings"]}
             for tag in tags:
-                if tag["mark"].upper() in placed_marks:
+                if house_windows.normalized_mark(tag["mark"]) in placed_marks:
                     continue
-                matching = [row for row in windows if row["mark"].upper() == tag["mark"].upper()]
+                matching = [row for row in windows if house_windows.normalized_mark(row["mark"]) == house_windows.normalized_mark(tag["mark"])]
+                if tag.get("level") and any(row.get("level") for row in matching):
+                    matching = [row for row in matching if house_windows.normalized_level(row.get("level")) ==
+                                house_windows.normalized_level(tag["level"])]
                 if len({(row["width_mm"], row["height_mm"]) for row in matching}) != 1 or not matching or not labels:
                     continue
                 nearest = sorted(labels, key=lambda row: math.dist((tag["x"], tag["y"]), (row["x"], row["y"])))
@@ -297,41 +335,44 @@ def apply(web, project, root, read_page=None):
                     continue
                 result["placed"] += [{"mark": row["mark"], "room": trace.get("room_label"), "trace_id": trace["trace_id"],
                                       "edge_index": row["edge_index"], "width_m": row["width_m"], "sill_height_m": row["sill_height_m"],
-                                      "head_height_m": row["head_height_m"], "assumptions": row["assumptions"]} for row in kept]
+                                      "head_height_m": row["head_height_m"], "assumptions": row["assumptions"],
+                                      "tag_position": row["tag_position"], "distance_mm": row["distance_mm"],
+                                      "placement_reason": row["placement_reason"], "evidence": row["evidence"]} for row in kept]
                 result["walls_taken_as_outside"] += [{"room": trace.get("room_label"), "edge_index": index,
                                                        "reason": "a window stands in this wall"} for index in newly_outside]
     finally:
         if close:
             close()
-    placed_marks = {str(row.get("mark", "")).upper() for row in result["placed"]}
+    placed_marks = {house_windows.normalized_mark(row.get("mark", "")) for row in result["placed"]}
     # The same mark can be read on more than one plan page or by both PDF text orders. Once it is placed,
     # don't also count another reading of that mark as a failed opening.
     # Only readings on other sheets (a schedule page, an RCP) are dropped: a house reuses a mark for identical windows,
     # so an unplaced W1 on a plan is a real window still missing even when another W1 was placed.
     result["unplaced"] = [row for row in result["unplaced"]
-                          if str(row.get("mark", "")).upper() not in placed_marks or row.get("page") in plan_levels]
+                          if house_windows.normalized_mark(row.get("mark", "")) not in placed_marks or row.get("page") in plan_levels]
     assigned_counts = {}
     for row in result["assigned_without_wall"]:
-        mark = row["mark"].upper()
+        mark = house_windows.normalized_mark(row["mark"])
         assigned_counts[mark] = assigned_counts.get(mark, 0) + 1
     conflicted = {mark for mark, count in assigned_counts.items() if count > 1 or mark in placed_marks}
     if conflicted:
         result["assigned_without_wall"] = [row for row in result["assigned_without_wall"]
-                                            if row["mark"].upper() not in conflicted]
+                                            if house_windows.normalized_mark(row["mark"]) not in conflicted]
         result["unplaced"] += [{"mark": mark, "reason": "Window tag has competing room or wall placements across plan pages."}
                                 for mark in sorted(conflicted)]
-    assigned_marks = {row["mark"].upper() for row in result["assigned_without_wall"]}
-    result["unplaced"] = [row for row in result["unplaced"] if str(row.get("mark", "")).upper() not in assigned_marks]
-    unplaced_marks = {str(row.get("mark", "")).upper() for row in result["unplaced"]}
+    assigned_marks = {house_windows.normalized_mark(row["mark"]) for row in result["assigned_without_wall"]}
+    result["unplaced"] = [row for row in result["unplaced"] if house_windows.normalized_mark(row.get("mark", "")) not in assigned_marks]
+    unplaced_marks = {house_windows.normalized_mark(row.get("mark", "")) for row in result["unplaced"]}
     for window in windows:
-        mark = str(window.get("mark", "")).upper()
+        mark = house_windows.normalized_mark(window.get("mark", ""))
         if mark and mark not in placed_marks and mark not in assigned_marks and mark not in unplaced_marks:
             result["unplaced"].append({"mark": window["mark"], "page": window["page"],
                 "reason": "Window is listed in the schedule but is not matched to a traced room wall."})
             unplaced_marks.add(mark)
     if any_saved and web is not None:   # once, after every room's windows (a house has many rooms; each took a rebuild)
-        from backend.phase1_supervisor_service import _build_calculation_evidence
-        _build_calculation_evidence(web, project)
+        # Deferred while the drawing questions run (autonomous_tasks_service.deferred_evidence_rebuild).
+        from backend.autonomous_tasks_service import evidence_changed
+        evidence_changed(web, project)
     result["coverage_status"] = ("unresolved" if not result["windows_in_schedule"] else
                                  "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else
                                  "provisional" if result["assigned_without_wall"] else "placed")

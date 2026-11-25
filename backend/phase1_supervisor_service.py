@@ -10,12 +10,14 @@ import re
 import time
 import uuid
 
+from ai import house_envelope
 from backend import ai_provider, autonomous_tasks_service as tasks, drawing_tasks_service as drawings
+from backend.ai_preliminary_service import HOUSE_ROOF_NOT_LINED_UP
 from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, current_check, read_json, write_json
 
 JOB_FILE = "phase1_supervisor_job.json"
 MAX_CYCLES = 3
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 3
 _JOB = BackgroundJob(JOB_FILE, [("audit", "Checking the empty-room model"),
     ("investigate", "Checking the drawings"), ("rebuild", "Updating the empty-room model")],
     "archie-phase1-supervisor", "Checking the empty-room model was interrupted. Resume to keep the saved drawing answers.")
@@ -38,6 +40,19 @@ def _name(value):
 
 def _key(value):
     return " ".join(str(value or "").casefold().split())
+
+
+def room_display_name(use, records):
+    """The room's name as people see it: its label ("Ensuite (2)" when one name is printed on separate rooms), with the
+    level added when another level has a room of the same label ("Storage (Basement)", "Storage (First Floor)")."""
+    label = " ".join(str(use.get("original_label") or use.get("label") or "").split())
+    level = " ".join(str(use.get("level_name") or "").split())
+    others = [row for row in records if row is not use and row.get("room_id") != use.get("room_id")
+              and _key(row.get("original_label") or row.get("label")) == _key(label)]
+    if others and level and level.casefold() != "unassigned level":
+        from ai.page_inventory import level_display_name
+        return f"{label} ({level_display_name(level)})"
+    return label
 
 
 def _positive(value):
@@ -86,20 +101,57 @@ def load_snapshot(project, report=None):
         current_tasks.append(row)
     rooms = []
     material_rooms = ((inputs.get("material") or {}).get("hourly_load_model") or {}).get("rooms", []) if current else []
-    for use in uses.get("records", []):
+    # Rooms are matched by their identity (level + label, numbered when one name is printed on separate rooms). A
+    # label alone matches only when no other room on any level has it: Turramurra's Basement and First Floor Storage
+    # rooms are two rooms, and the first floor's must not take the basement's outline (2026-11-18).
+    records = [row for row in uses.get("records", []) if isinstance(row, dict)]
+    label_count = {}
+    for use in records:
+        key = _key(use.get("original_label") or use.get("label"))
+        label_count[key] = label_count.get(key, 0) + 1
+    page_levels = {}
+
+    def page_level(page):
+        if type(page) is not int:
+            return None
+        if page not in page_levels:
+            try:
+                page_levels[page] = _key(tasks._page_level(root, page) or "Unassigned level")
+            except (OSError, ValueError, TypeError, KeyError):
+                page_levels[page] = None
+        return page_levels[page]
+
+    for use in records:
         label = use.get("original_label") or use.get("label") or ""
-        matching = [row for row in traces if row.get("room_id") == use.get("room_id") or _key(row.get("room_label")) == _key(label)]
-        area = areas.get(use.get("room_id"), {})
-        height = next((row for row in heights.get("records", []) if row.get("room_id") == use.get("room_id")
-                       or _key(row.get("original_label")) == _key(label)), {})
-        material = next((row for row in material_rooms if _key(row.get("name")) == _key(label)), {})
-        room_tasks = [row for row in current_tasks if (row.get("packet") or {}).get("room_id") == use.get("room_id")
-                      or any(_key(label) == _key(value) for value in (row.get("packet") or {}).get("room_names", []))]
-        rooms.append({"id": use.get("room_id"), "name": label, "scope": use.get("space_scope"),
+        room_id = use.get("room_id")
+        level = use.get("level_name") or "Unassigned level"
+        unique = label_count.get(_key(label), 0) <= 1
+
+        def named(names, page=None):
+            if not any(_key(label) == _key(value) for value in names or [] if isinstance(value, str)):
+                return False
+            return unique or (page_level(page) is not None and page_level(page) == _key(level))
+
+        matching = [row for row in traces if row.get("room_id") == room_id]
+        area = areas.get(room_id, {})
+        height = next((row for row in heights.get("records", []) if row.get("room_id") == room_id), None)
+        if height is None:
+            height = next((row for row in heights.get("records", []) if unique and _key(row.get("original_label")) == _key(label)), {})
+        material = next((row for row in material_rooms if row.get("source_room_id") == room_id), None)
+        if material is None:     # an input set from before rooms carried their identity
+            material = next((row for row in material_rooms if unique and not row.get("source_room_id")
+                             and _key(row.get("name")) == _key(label)), {})
+        room_tasks = [row for row in current_tasks if (row.get("packet") or {}).get("room_id") == room_id
+                      or named((row.get("packet") or {}).get("room_names", []), (row.get("packet") or {}).get("page"))]
+        rooms.append({"id": room_id, "name": label, "display_name": room_display_name(use, records),
+            "level": level, "label_unique": unique, "scope": use.get("space_scope"),
             "use_status": use.get("status"), "traces": matching, "area_m2": area.get("area_m2") or sum(
                 row.get("ai_measured_area_m2", 0) or 0 for row in matching),
-            "area_source": area.get("area_origin") or area.get("method") or " ".join(str(row.get("method", "")) for row in matching),
+            "area_source": area.get("area_origin") or area.get("method") or area.get("area_source") or " ".join(str(row.get("method", "")) for row in matching),
             "height": height, "model": material, "model_current": current, "tasks": room_tasks,
+            "house_roof_not_lined_up": next((str(row.get("reason") or "") for row in inputs.get("phase1_assumptions") or []
+                if material and isinstance(row, dict) and row.get("room_id") == material.get("room_id")
+                and row.get("component") == HOUSE_ROOF_NOT_LINED_UP), ""),
             "pages": sorted({row.get("page") for row in matching if type(row.get("page")) is int}
                             | {row.get("page") for row in use.get("evidence", []) if type(row.get("page")) is int})})
     perimeter_sides = []
@@ -111,7 +163,10 @@ def load_snapshot(project, report=None):
             for mapping in perimeter.get("trace_edges", {}).get(trace.get("trace_id"), []):
                 if mapping.get("perimeter_run_index") is not None:
                     perimeter_sides.append(edges.get(mapping["edge_index"], "unknown"))
-    return {"rooms": rooms, "tasks": current_tasks, "traces": traces,
+    dwelling = (uses.get("dwelling_context") or {}).get("is_dwelling") is True
+    return {"rooms": rooms, "tasks": current_tasks, "traces": traces, "dwelling": dwelling,
+        # No outside-walls question exists for such a house: its unclassified walls are set by rule (ai/house_envelope.py).
+        "house_walls_by_rule": dwelling and tasks._house_without_shared_walls(root),
         "storefront_pages": [row["page"] for row in tasks._storefront_elevation_pages(ai_input)],
         "height_pages": [row["page"] for row, _labels in [*ceiling, *views]], "perimeter_sides": perimeter_sides,
         "report": stored if report_current else {}, "input_current": current,
@@ -196,7 +251,7 @@ def audit(snapshot):
     all_internal = bool(tenancy_sides) and all(side in {"internal", "adjacent_tenancy"} for side in tenancy_sides)
 
     def add(rank, kind, room, task, sentence, pages=None, target=None):
-        label = _name(room.get("name"))
+        label = _name(room.get("display_name") or room.get("name"))
         plan_page = next((trace.get("page") for trace in room.get("traces", []) if trace.get("page")), None)
         pages = sorted(set(page for page in (pages or room.get("pages", [])) if type(page) is int))
         identity = f"{kind}:{room.get('id') or _key(label)}" + (f":{task}:{target or ''}" if kind == "unanswered" else "")
@@ -225,12 +280,21 @@ def audit(snapshot):
                 "P0_unnamed_space", f"Check plan page {page} for floor that no traced room covers (drawings often leave "
                 "the main dining or sales area unlabelled); that check wasn't answered.", target=record.get("target"))
 
+    def same_room(room, value):
+        """A drawing check's room name is this room's when the label is unique, or the check names it by identity."""
+        return _key(value) == _key(room.get("name")) and room.get("label_unique", True)
+
     for room in rooms:
-        label = _name(room.get("name"))
+        label = _name(room.get("display_name") or room.get("name"))
         traces = room.get("traces", [])
         area = room.get("area_m2")
+        # An area-only room's source is the room-size step's wording ("AI estimate from the plan", "tenancy area
+        # remainder": autonomous_tasks_service.ROOM_SIZE_SOURCES), not its method name; both are last-resort areas.
         if not _positive(area) or any(term in str(room.get("area_source", "")).casefold()
-                                      for term in ("room_size_estimated", "last_resort", "generic_profile", "profile_default")):
+                                      for term in ("room_size_estimated", "room_size_remainder", "last_resort",
+                                                   "generic_profile", "profile_default",
+                                                   tasks.ROOM_SIZE_SOURCES["estimated"].casefold(),
+                                                   tasks.ROOM_SIZE_SOURCES["remainder"].casefold())):
             add(1, "room_area", room, "P0_room_outlines", f"Check {label}'s outline and area; its area is missing or only a last-resort estimate.")
         if room.get("use_status") in {"unresolved", "conflict", "blocked", "needs_review", "stale"}:
             add(1, "room_use", room, "room_identity_use", f"Check how {label} is used so its empty-room calculation includes the right space.")
@@ -241,14 +305,14 @@ def audit(snapshot):
             packet = record.get("packet") or {}
             related = (record in room.get("tasks", []) or packet.get("room_id") == room.get("id")
                        or (packet.get("page") in related_pages and record.get("task") in {"P3_boundaries", "P3_surroundings", "P4_storefront_wall"})
-                       or any(_key(label) == _key(value) for value in packet.get("rooms", []) if isinstance(value, str)))
+                       or any(same_room(room, value) for value in packet.get("rooms", []) if isinstance(value, str)))
             if related and (not record.get("current", True) or record.get("status") in {"failed", "blocked", "waiting_for_reply"}):
                 add(2, "unanswered", room, record["task"], f"Finish the unanswered drawing check for {label}: {drawings.TASK_LABELS.get(record['task'], 'checking the room').lower()}.",
                     pages=([packet["page"]] if type(packet.get("page")) is int else None), target=record.get("target"))
         sides = _boundaries(traces)
         if storefront and any(side in {"external", "mall"} for side in sides) and not _has_glass(room):
             opening = next((row for row in records if row.get("task") == "P4_openings" and (
-                (row.get("packet") or {}).get("room_id") == room.get("id") or _key((row.get("packet") or {}).get("room_label")) == _key(label))), None)
+                (row.get("packet") or {}).get("room_id") == room.get("id") or same_room(room, (row.get("packet") or {}).get("room_label")))), None)
             add(3, "storefront_glass", room, "P4_openings" if opening else "P4_storefront_wall",
                 f"Read {label}'s shopfront glass panel by panel from the elevation; the empty-room model needs its glazed widths.",
                 pages=storefront, target=opening.get("target") if opening else None)
@@ -256,23 +320,43 @@ def audit(snapshot):
             add(4, "ceiling_height", room, "P7_ceiling_heights", f"Check {label}'s ceiling height on the labelled ceiling plan, elevation or section.", pages=height_pages)
         if storefront and sides and all_internal:
             add(5, "internal_perimeter", room, "P3_boundaries", f"Check {label}'s perimeter: its walls all face other rooms or tenancies although a shopfront elevation exists.", pages=storefront + room.get("pages", []))
-        if any(side == "unknown" for side in sides):
+        # A house that shares no wall with another dwelling is never asked what its walls face: an unclassified wall is
+        # outside unless a traced room is beyond it (user decision 2026-10-30), a labelled assumption of the result. Job
+        # A's five "unknown walls" checks had no question to ask and ended "unavailable" (2026-11-19).
+        if any(side == "unknown" for side in sides) and not snapshot.get("house_walls_by_rule"):
             add(6, "unknown_walls", room, "P3_boundaries", f"Check what is on the other side of {label}'s unknown walls.")
-        if traces and any(trace.get("roof") in {None, "", "unknown"} or trace.get("roof_source") == "ai_fallback" for trace in traces):
+        # In a house what is over a room follows from its level (the top storey is under the roof, a lower one under the
+        # storey above: ai_preliminary_service._house_level_roof), and no roof question is asked (Turramurra, 2026-11-18:
+        # every room was flagged and sent a tenancy roof check that a house never gets).
+        house_level = snapshot.get("dwelling") and house_envelope.level_rank(room.get("level")) is not None
+        if (traces and not house_level
+                and any(trace.get("roof") in {None, "", "unknown"} or trace.get("roof_source") == "ai_fallback" for trace in traces)):
             add(6, "roof", room, "P5_roof", f"Check what is above {label}; its roof or ceiling exposure is unknown or assumed.")
+        elif house_level and room.get("house_roof_not_lined_up"):
+            # The plans couldn't settle what is over it (roof or the storey above): said, not guessed (2026-11-18).
+            note = room["house_roof_not_lined_up"]
+            why = note.split(" — ", 1)[1].split(". Whether", 1)[0] if " — " in note else ""
+            add(6, "roof", room, "P5_roof", f"Check what is above {label} — the roof plan couldn't be lined up with the "
+                f"{room.get('level') or 'room'}'s plan" + (f" ({why})" if why else "") + "; it is taken as under the storey above.")
 
     report = snapshot.get("report") or {}
     if report:
         for room in rooms:
-            label = _name(room.get("name"))
+            label = _name(room.get("display_name") or room.get("name"))
+            name = room.get("name")       # the model's and the report's room name is the room's label
+            model_id = (room.get("model") or {}).get("room_id")
             coverage = report.get("phase1_coverage") or {}
-            omitted = any(_key(row.get("label")) == _key(label) for row in coverage.get("rooms_left_out", []))
-            if "rooms_included" in coverage and _key(label) not in {_key(name) for name in coverage["rooms_included"]}:
+            omitted = any(_key(row.get("label")) == _key(name) for row in coverage.get("rooms_left_out", []))
+            if "rooms_included" in coverage and _key(name) not in {_key(value) for value in coverage["rooms_included"]}:
                 omitted = True
-            results = [row for scenario in report.get("scenario_results", []) for row in scenario.get("rooms", []) if _key(row.get("name")) == _key(label)]
+            results = [row for scenario in report.get("scenario_results", []) for row in scenario.get("rooms", [])
+                       if ((row.get("room_id") == model_id) if model_id
+                           else (room.get("label_unique", True) and _key(row.get("name")) == _key(name)))]
             zero = bool(results) and all(isinstance((row.get("peak") or {}).get("total_kw"), (int, float))
                 and abs(row["peak"]["total_kw"]) < 1e-9 for row in results)
-            surfaces = [row for row in report.get("phase1_surface_audit", []) if _key(row.get("room_name")) == _key(label)]
+            surfaces = [row for row in report.get("phase1_surface_audit", [])
+                        if ((row.get("room_id") == model_id) if model_id and row.get("room_id")
+                            else (room.get("label_unique", True) and _key(row.get("room_name")) == _key(name)))]
             if not results and surfaces:
                 zero = all(isinstance(row.get("total_kw"), (int, float)) and abs(row["total_kw"]) < 1e-9 for row in surfaces)
             # A zero is only suspicious when the room has something that should load it: an outside wall, an exposed
@@ -281,7 +365,9 @@ def audit(snapshot):
             if zero and not omitted and not _exposed(room):
                 continue
             if omitted or zero:
-                add(7, "omitted_room" if omitted else "zero_load", room, "P3_boundaries",
+                # A room with no outline has no walls to check yet: its outline comes first (Job A's Kitchen, 2026-11-19).
+                add(7, "omitted_room" if omitted else "zero_load", room,
+                    "P3_boundaries" if room.get("traces") else "P0_room_outlines",
                     f"Check {label}'s envelope: it was left out of the empty-room result." if omitted else f"Check {label}'s envelope: its calculated load is zero, so verify every boundary and opening.")
         peak = (report.get("included_scope_peak") or {}).get("total_kw")
         if (rooms and any(_exposed(room) for room in rooms) and isinstance(peak, (float, int)) and abs(peak) < 1e-9
@@ -298,7 +384,9 @@ def investigation_text(gap):
 
 def select_investigations(gaps, attempts):
     """Queue every eligible material gap, ranked; concurrency bounds execution, never the queue length."""
-    return [gap for gap in gaps if attempts.get(gap["id"], 0) < MAX_ATTEMPTS]
+    eligible = [gap for gap in gaps if attempts.get(gap["id"], 0) < MAX_ATTEMPTS]
+    return sorted(eligible, key=lambda gap: (gap.get("rank", 99), 0 if gap.get("kind") == "room_area" else 1,
+                                             _key(gap.get("room")), gap["id"]))
 
 
 def _investigation_wave(task):
@@ -356,6 +444,32 @@ def group_investigations(gaps):
     return list(grouped.values())
 
 
+def third_attempt_note(gap, history, snapshot, root):
+    """Give the final drawing question its prior result and nearby model evidence."""
+    prior = [row for row in history if row.get("gap_id") in gap["gap_ids"]]
+    outcomes = []
+    for row in prior[-4:]:
+        result = row.get("status") or row.get("outcome") or "unresolved"
+        reason = str(row.get("reason") or "")[:180]
+        outcomes.append(f"{result}: {reason}" if reason else f"{result}: the gap remained open")
+    context = " Earlier checks: " + "; ".join(outcomes) + "." if outcomes else ""
+    for row in reversed(prior):
+        if not row.get("task") or not row.get("target"):
+            continue
+        record = tasks._current_task(root, row["task"], row["target"])
+        answer = (record or {}).get("applied_value") if (record or {}).get("run_id") == row.get("run_id") else None
+        if answer:
+            context += " Earlier drawing answer: " + json.dumps(answer, ensure_ascii=False, default=str)[:450] + "."
+            break
+    pages = set(gap.get("pages") or [])
+    neighbours = [room for room in snapshot.get("rooms", []) if room.get("id") != gap.get("room_id")
+                  and pages.intersection(room.get("pages") or []) and _positive(room.get("area_m2"))]
+    if neighbours:
+        context += " Other rooms on these pages: " + ", ".join(
+            f"{_name(room.get('name'))} {room['area_m2']:g} m²" for room in neighbours[:6]) + "."
+    return context
+
+
 def _usage(root):
     rows = []
     path = Path(root) / ai_provider.USAGE_FILE
@@ -375,6 +489,9 @@ def _rebuild(web, project):
     """Reassemble and locally calculate a preview; the normal calculation job publishes after checks settle."""
     from backend import ai_preliminary_service as model, skill_workflow_service as skills
     checkpoint()
+    from backend import reviewer_room_geometry_service
+    if reviewer_room_geometry_service.split_repeated_room_traces(project["review_dir"]):
+        _build_calculation_evidence(web, project)     # separate same-named rooms in an older job: new room identities
     paths = model._paths(project)
     inputs = read_json(paths["current_set"])
     if not inputs or model._stale_reasons(paths, inputs):
@@ -390,8 +507,41 @@ def _rebuild(web, project):
     return load_snapshot(project, report=report)
 
 
+def room_areas(snapshot):
+    """{room id: {"name", "area_m2"}} for the rooms of a snapshot (area rounded to 0.1 m², None when it has none)."""
+    result = {}
+    for room in snapshot.get("rooms", []):
+        if not room.get("id"):
+            continue
+        area = room.get("area_m2")
+        result[str(room["id"])] = {"name": room.get("name") or "", "area_m2": round(float(area), 1) if _positive(area) else None}
+    return result
+
+
+def area_changes(before, after):
+    """Rooms whose area this check changed: [{"room", "before_m2", "after_m2"}]. A difference under 0.1 m² is rounding."""
+    changes = []
+    for room_id, start in sorted((before or {}).items(), key=lambda item: str(item[1].get("name", ""))):
+        now = (after or {}).get(room_id)
+        if not now or start.get("area_m2") == now.get("area_m2"):
+            continue
+        if start.get("area_m2") is not None and now.get("area_m2") is not None and abs(start["area_m2"] - now["area_m2"]) < 0.1:
+            continue
+        changes.append({"room": now.get("name") or start.get("name"), "before_m2": start.get("area_m2"), "after_m2": now.get("area_m2")})
+    return changes
+
+
+def _take_in_review(project):
+    """The fixes this check applied (traced rooms, wall faces, room uses) refine the drawing review's answers; they
+    are downstream of it, so they must not make "Review room names and site" look out of date. Changes that don't
+    come through this check (a new PDF, other pages, new page readings or instructions) still do."""
+    from backend import skill_workflow_service as skills
+    manifest = read_json(Path(project["review_dir"]) / "skill_workflow_run.json")
+    skills.take_in_downstream(project, manifest.get("run_id"))
+
+
 def _room_use_investigation(web, project, gap):
-    """Replace only a complete, validated room-use answer; partial replies never overwrite the room list."""
+    """Apply a validated answer only to the rooms named by this investigation."""
     from backend import skill_workflow_service as skills
     root = Path(project["review_dir"])
     manifest = read_json(root / "skill_workflow_run.json")
@@ -414,16 +564,37 @@ def _room_use_investigation(web, project, gap):
             "seconds": raw.get("seconds", 0), "error": error, **(raw.get("usage") or {})})
 
     previous = read_json(directory / "room_identity_use.json")
+    target_ids = {gap_id.removeprefix("room_use:") for gap_id in gap.get("gap_ids", [])
+                  if gap_id.startswith("room_use:")}
+    target_ids.discard("project")
+    if not target_ids and gap.get("room_id") not in (None, "project"):
+        target_ids = {gap["room_id"]}
     try:
         result = skills._execute_subskill(spec, project, dependencies, manifest["source_fingerprint"],
-            {"question": gap["note"] + " Return the complete room list, preserving every already evidenced room."})
+            {"question": gap["note"] + (" Answer only for these room IDs: " + ", ".join(sorted(target_ids)) + "."
+                                           if target_ids else " Return the complete room list, preserving every already evidenced room.")})
         attempt = result.pop("_attempt_record", {})
         result = skills._validate_subskill_output(spec, result, registry,
             allowed_pages=skills._consented_page_ids(skills._project_paths(project)))
-        prior = {row.get("room_id") for row in previous.get("proposal_fields", {}).get("rooms", []) if row.get("room_id")}
-        current = {row.get("room_id") for row in result.get("proposal_fields", {}).get("rooms", []) if row.get("room_id")}
-        if not prior <= current:
-            raise ValueError("The targeted answer omitted previously evidenced rooms; the existing room list was kept.")
+        old_rows = previous.get("proposal_fields", {}).get("rooms", [])
+        new_rows = result.get("proposal_fields", {}).get("rooms", [])
+        prior = {row["room_id"]: row for row in old_rows if row.get("room_id")}
+        current = {row["room_id"]: row for row in new_rows if row.get("room_id")}
+        if len(current) != len(new_rows):
+            raise ValueError("The room-use answer has missing or duplicate room IDs.")
+        if target_ids:
+            if not target_ids <= current.keys():
+                raise ValueError("The targeted answer omitted a requested room; the existing room list was kept.")
+            # Only the asked-about rooms are taken from the answer. Anything it says about other rooms (a reply that
+            # repeats the whole list, with small differences) is ignored rather than throwing the answer away.
+            result["affected_ids"] = [room_id for room_id in result.get("affected_ids", []) if room_id in target_ids]
+            result["proposal_fields"]["rooms"] = [current[row["room_id"]] if row.get("room_id") in target_ids else row
+                                                  for row in old_rows]
+            result["proposal_fields"]["rooms"].extend(current[room_id] for room_id in sorted(target_ids - prior.keys()))
+            for key in ("affected_ids", "observations", "inferences", "citations", "alternatives", "unresolved_fields", "remediation"):
+                result[key] = list(previous.get(key, [])) + list(result.get(key, []))
+        elif not prior.keys() <= current.keys():
+            raise ValueError("The room-use answer omitted previously evidenced rooms; the existing room list was kept.")
     except Exception as error:
         attempt = getattr(error, "attempt_record", attempt)
         record_unlogged_attempt(False, str(error)[:300])
@@ -472,36 +643,49 @@ def run(web, project, step=lambda *args: None):
     attempts, history = deepcopy(saved.get("attempts", {})), deepcopy(saved.get("history", []))
     resolved = set(saved.get("resolved_gap_ids", []))
     cycle = int(saved.get("cycle") or 0)
+    failed_inputs = deepcopy(saved.get("failed_inputs", {}))
+    cycle_timings = deepcopy(saved.get("cycle_timings", []))
     snapshot = _rebuild(web, project)
     gaps = audit(snapshot)
     initial_ids = {row["id"] for row in gaps}
     check = current_check()
+    # Each room's area when this check started (kept across a resume), so a changed area is said, not silent.
+    baseline = saved.get("area_baseline") if isinstance(saved.get("area_baseline"), dict) else room_areas(snapshot)
 
     def progress(**extra):
         checkpoint()
         state = read_json(root / JOB_FILE)
-        state.update(attempts=attempts, history=history, cycle=cycle, max_cycles=MAX_CYCLES,
+        state.update(attempts=attempts, history=history, cycle=cycle, max_cycles=MAX_CYCLES, max_attempts=MAX_ATTEMPTS,
                      gaps_found=len(initial_ids | set(attempts) | {gap["id"] for gap in gaps}), gaps_fixed=len(resolved),
-                     resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root), **extra)
+                     resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root),
+                     area_baseline=baseline, area_changes=area_changes(baseline, room_areas(snapshot)),
+                     failed_inputs=failed_inputs, cycle_timings=cycle_timings, **extra)
         write_json(root / JOB_FILE, state)
         write_json(root / "phase1_supervisor_state.json", {key: state[key] for key in (
-            "supervision_id", "attempts", "history", "cycle", "resolved_gap_ids", "exceptions", "model_fingerprint") if key in state})
+            "supervision_id", "attempts", "history", "cycle", "resolved_gap_ids", "exceptions", "model_fingerprint",
+            "area_baseline") if key in state})
 
     unavailable = ai_unavailable(project)
     progress(stop_reason="", not_asked=unavailable)
     while cycle < MAX_CYCLES and not unavailable:
         checkpoint()
         selected = select_investigations(gaps, attempts)
+        current_fp = model_fingerprint(snapshot)
+        selected = [gap for gap in selected if failed_inputs.get(gap["id"]) != current_fp
+                    or attempts.get(gap["id"], 0) == MAX_ATTEMPTS - 1]
         if not selected:
             break
         cycle += 1
+        cycle_started = time.monotonic()
+        ai_seconds = rebuild_seconds = audit_seconds = 0.0
         before = model_fingerprint(snapshot), {row["id"] for row in gaps}
+        changed = False
         step("audit", "Checking room areas, boundaries, glass and ceiling heights")
         for wave in range(5):
             selected = [gap for gap in select_investigations(gaps, attempts) if _investigation_wave(gap["task"]) == wave]
             if not selected:
                 continue
-            prepared, skills_to_run, changed = {}, [], False
+            prepared, skills_to_run = {}, []
             for gap in selected:
                 attempts[gap["id"]] = attempts.get(gap["id"], 0) + 1
             progress()
@@ -509,16 +693,22 @@ def run(web, project, step=lambda *args: None):
                 checkpoint()
                 gap["previous_targets"] = [row["target"] for row in history if row.get("target")
                     and row.get("gap_id") in gap["gap_ids"] and row.get("status") in SUCCESS]
+                if any(attempts.get(gap_id) == MAX_ATTEMPTS for gap_id in gap["gap_ids"]):
+                    gap["note"] += third_attempt_note(gap, history, snapshot, root)
                 try:
                     if gap["task"] == "room_identity_use":
                         skills_to_run.append(gap)
                         continue
                     try:
                         records = tasks.prepare_investigation(project, gap)
-                    except ValueError:
+                    except ValueError as outline_error:
                         if gap["task"] != "P0_room_outlines":
                             raise
-                        records = tasks.prepare_investigation(project, {**gap, "task": "P0_room_sizes"})
+                        try:
+                            records = tasks.prepare_investigation(project, {**gap, "task": "P0_room_sizes"})
+                        except ValueError as size_error:
+                            # Both reasons: the outline's names the prerequisite that held it back (2026-11-19).
+                            raise ValueError(f"{outline_error} {size_error}") from size_error
                     for record in records:
                         if record.get("status") == "blocked":
                             raise ValueError(record.get("block_reason") or "This drawing check needs earlier evidence.")
@@ -542,30 +732,36 @@ def run(web, project, step=lambda *args: None):
             progress(active_investigations=list(active.values()))
             if active:
                 step("investigate", next(iter(active.values()))["message"])
-            with ThreadPoolExecutor(max_workers=ai_provider.parallel_calls()) as pool:
-                futures = {pool.submit(drawings.request_investigation, project, record, check=check): (record, gap)
-                           for record, gap in prepared.values()}
-                for future in as_completed(futures):
-                    checkpoint()
-                    record, gap = futures[future]
-                    from backend.job_progress import stage_blocker
-                    if stage_blocker(project, "supervisor"):
-                        raise JobCancelled()
-                    try:
-                        result = future.result()
-                        outcome = drawings.apply_investigation(web, project, record, result)
-                    except Exception as error:
-                        outcome = drawings.archive_investigation_failure(project, record, error) or {
-                            "status": "superseded", "reason": "The drawing inputs changed while this check was running."}
-                    changed = changed or outcome.get("status") in SUCCESS
-                    history.extend({"gap_id": gap_id, "task": record["task"], "target": record["target"],
-                                    "cycle": cycle, "run_id": record["run_id"], **outcome} for gap_id in gap["gap_ids"])
-                    active.pop((record["task"], record["target"]), None)
-                    progress(active_investigations=list(active.values()))
-                    if active:
-                        step("investigate", next(iter(active.values()))["message"])
+            if prepared:
+                ai_started = time.monotonic()
+                with ThreadPoolExecutor(max_workers=min(4, ai_provider.parallel_calls())) as pool:
+                    futures = {pool.submit(drawings.request_investigation, project, record, check=check): (record, gap)
+                               for record, gap in prepared.values()}
+                    for future in as_completed(futures):
+                        checkpoint()
+                        record, gap = futures[future]
+                        from backend.job_progress import stage_blocker
+                        if stage_blocker(project, "supervisor"):
+                            raise JobCancelled()
+                        try:
+                            result = future.result()
+                            outcome = drawings.apply_investigation(web, project, record, result)
+                        except Exception as error:
+                            outcome = drawings.archive_investigation_failure(project, record, error) or {
+                                "status": "superseded", "reason": "The drawing inputs changed while this check was running."}
+                        changed = changed or outcome.get("status") in SUCCESS
+                        if outcome.get("status") not in SUCCESS:
+                            failed_inputs.update({gap_id: current_fp for gap_id in gap["gap_ids"]})
+                        history.extend({"gap_id": gap_id, "task": record["task"], "target": record["target"],
+                                        "cycle": cycle, "run_id": record["run_id"], **outcome} for gap_id in gap["gap_ids"])
+                        active.pop((record["task"], record["target"]), None)
+                        progress(active_investigations=list(active.values()))
+                        if active:
+                            step("investigate", next(iter(active.values()))["message"])
+                ai_seconds += time.monotonic() - ai_started
             for gap in skills_to_run:
                 checkpoint()
+                ai_started = time.monotonic()
                 step("investigate", investigation_text(gap))
                 progress(active_investigations=[{"message": investigation_text(gap), "pages": gap["pages"],
                     "label": "Room-use specialist", "started_at": time.time()}])
@@ -575,37 +771,58 @@ def run(web, project, step=lambda *args: None):
                     outcome = {"status": "failed", "reason": str(error)[:500]}
                 changed = changed or outcome.get("status") in SUCCESS
                 history.extend({"gap_id": gap_id, "cycle": cycle, **outcome} for gap_id in gap["gap_ids"])
+                if outcome.get("status") not in SUCCESS:
+                    failed_inputs.update({gap_id: current_fp for gap_id in gap["gap_ids"]})
+                ai_seconds += time.monotonic() - ai_started
             checkpoint()
-            if not changed:
-                continue                 # nothing was applied: the model and its audit are unchanged (a rebuild takes 30-55 s)
+        # All independent/dependent questions in this cycle have now been answered. Regenerate once only
+        # when an accepted answer changed physical inputs; the pre-rebuild fingerprint is authoritative.
+        if changed:
             step("rebuild")
             tasks._export_determinations(root)
             _build_calculation_evidence(web, project)
             tasks._refresh_geometry_tasks(root)
-            snapshot = _rebuild(web, project)
+            # The rebuild may expose new drawing questions (including glass and corner refinements).
+            # Send them in this cycle, before auditing the model built from their evidence.
+            if drawings._waiting(root) and not read_json(root / JOB_FILE).get("provider_limited"):
+                try:
+                    drawings.answer_all(web, project)
+                except ai_provider.UsageLimitReached:
+                    progress(provider_limited=True)
+            from backend import ai_preliminary_service as model
+            paths = model._paths(project)
+            stored_inputs = read_json(paths["current_set"])
+            if not stored_inputs or model._stale_reasons(paths, stored_inputs):
+                rebuild_started = time.monotonic()
+                snapshot = _rebuild(web, project)
+                rebuild_seconds += time.monotonic() - rebuild_started
+            audit_started = time.monotonic()
+            _take_in_review(project)
             gaps = audit(snapshot)
+            audit_seconds += time.monotonic() - audit_started
+        else:
+            failed_inputs.update({gap["id"]: current_fp for gap in select_investigations(gaps, attempts)})
+        cycle_timings.append({"cycle": cycle, "ai_seconds": round(ai_seconds, 3),
+                              "rebuild_seconds": round(rebuild_seconds, 3), "audit_seconds": round(audit_seconds, 3),
+                              "total_seconds": round(time.monotonic() - cycle_started, 3)})
         after = model_fingerprint(snapshot), {row["id"] for row in gaps}
         resolved = (resolved | (before[1] - after[1])) - after[1]
         progress(active_investigations=[])
-        if before == after:
-            # A rejected answer has not changed the model, but its correction feedback changes
-            # the next question. Allow the existing second attempt before declaring no progress.
-            correction_pending = any(
-                row.get("cycle") == cycle and row.get("status") == "waiting_for_reply"
-                and attempts.get(row.get("gap_id"), 0) < MAX_ATTEMPTS for row in history)
-            if not correction_pending:
-                progress(stop_reason="no_progress")
-                break
+        final_checks_available = any(attempts.get(gap["id"], 0) == MAX_ATTEMPTS - 1 for gap in gaps)
+        if (before == after or not changed) and not final_checks_available:
+            progress(stop_reason="no_progress")
+            break
     # Questions the fixes above unlocked have no other way to be sent: answer them once (the drawing step's own limits
     # apply), so the result uses them.
-    if not unavailable and drawings._waiting(root):
+    if not unavailable and not read_json(root / JOB_FILE).get("provider_limited") and drawings._waiting(root):
         step("rebuild")
         try:
             drawings.answer_all(web, project)
             snapshot = _rebuild(web, project)
+            _take_in_review(project)
             gaps = audit(snapshot)
         except ai_provider.UsageLimitReached:
-            pass
+            progress(provider_limited=True)
     exceptions = [{**gap, "attempts": attempts.get(gap["id"], 0),
                    "tried": [row for row in history if row.get("gap_id") == gap["id"]],
                    **({"message": gap["message"].rstrip(".") + ". " + unavailable} if unavailable else {})} for gap in gaps]
@@ -622,7 +839,8 @@ def run(web, project, step=lambda *args: None):
     progress(exceptions=exceptions, active_investigations=[], model_fingerprint=model_fingerprint(snapshot), result_fingerprint=result_fp,
              outcome=outcome, stop_reason=("no_progress" if read_json(root / JOB_FILE).get("stop_reason") == "no_progress"
                  else "ai_unavailable" if unavailable and gaps
-                 else "cycle_limit" if cycle >= MAX_CYCLES and gaps else "attempt_limit" if gaps else "ready"))
+                 else "cycle_limit" if cycle >= MAX_CYCLES and any(
+                     attempts.get(gap["id"], 0) < MAX_ATTEMPTS for gap in gaps) else "attempt_limit" if gaps else "ready"))
     return {"exceptions": exceptions, "outcome": outcome, "spend": _usage(root), "result_fingerprint": result_fp}
 
 
@@ -656,8 +874,11 @@ def status(web, project):
         "label": drawings.TASK_LABELS.get(row.get("task"), "Room-use specialist" if row.get("task") == "room_identity_use" else "Model investigation"),
         "status": row.get("status") or row.get("outcome", "unknown"), "cycle": row.get("cycle"),
     } for row in state.get("history", [])[-8:]]
-    for key in ("history", "attempts", "resolved_gap_ids"):
+    for key in ("history", "attempts", "resolved_gap_ids", "area_baseline"):
         state.pop(key, None)
+    state["area_changes"] = [{name: row.get(name) for name in ("room", "before_m2", "after_m2")}
+                             for row in state.get("area_changes") or [] if isinstance(row, dict)]
+
     if state.get("error"):
         state["error"] = "Checking the empty-room model stopped before it finished. Resume to keep the saved answers."
     if state.get("status") == "done" and not state["current"]:
@@ -665,7 +886,12 @@ def status(web, project):
         state.update(status="stale", step_state="waiting", recovery=recovery("stale", "The drawing inputs changed. Recheck the empty-room model."))
     # Keep internal routing in the job archive, outside operator-facing progress and exceptions.
     for key in ("gaps", "exceptions"):
-        state[key] = [{name: row.get(name) for name in ("message", "room", "pages", "attempts")} for row in state.get(key, [])]
+        state[key] = [{name: row.get(name) for name in ("message", "room", "pages", "attempts", "kind")} for row in state.get(key, [])]
+    # Stopped at a limit with gaps left: the check is finished, but it isn't a clean "done" for the person (Turramurra
+    # 2026-11-18: 56 gaps found, 9 fixed, shown as a plain green tick).
+    state["gaps_remaining"] = len(state.get("exceptions") or [])
+    state["stopped_at_limit"] = bool(state.get("status") == "done" and state["gaps_remaining"]
+                                     and state.get("stop_reason") in {"cycle_limit", "attempt_limit", "no_progress"})
     return state
 
 
@@ -699,7 +925,7 @@ def start(web, project, action="start", expected_run_id=None):
     previous = read_json(_JOB.path(project))
     if action == "start" and previous.get("status") == "done" and previous.get("source_fingerprint") == source_fingerprint(project):
         return {**status(web, project), "deduplicated": True}
-    fields = {key: deepcopy(previous[key]) for key in ("attempts", "history", "cycle", "resolved_gap_ids", "supervision_id") if key in previous}
+    fields = {key: deepcopy(previous[key]) for key in ("attempts", "history", "cycle", "resolved_gap_ids", "supervision_id", "area_baseline") if key in previous}
     if previous.get("status") == "done" and previous.get("source_fingerprint") != source_fingerprint(project):
         fields = {}
     fields.setdefault("supervision_id", uuid.uuid4().hex)

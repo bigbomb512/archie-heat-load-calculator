@@ -106,9 +106,38 @@ def save_job_setup(project, data):
     return updated
 
 
+def house_above(root):
+    """{"dwelling": bool, "above_summary": text} for the job facts. "Above the tenancy" is a shop question; in a house
+    what is over each room follows from its level (the top storey under the roof, each lower storey under the storey
+    above: ai_preliminary_service._house_level_roof), so the facts say that instead. Empty summary when no level is
+    named yet; {"dwelling": False} for any other building, which keeps the tenancy question."""
+    from ai import house_envelope
+    from backend import house_windows_service
+    try:
+        dwelling = house_windows_service.is_dwelling(root)
+    except (OSError, ValueError, TypeError, KeyError):
+        dwelling = False
+    if not dwelling:
+        return {"dwelling": False}
+    use = _read(Path(root) / "room_use_resolution.json", {})
+    levels = {}
+    for row in (use.get("records") or []) if isinstance(use, dict) else []:
+        rank = house_envelope.level_rank((row or {}).get("level_name")) if isinstance(row, dict) else None
+        if rank is not None:
+            levels.setdefault(rank, str(row["level_name"]))
+    if not levels:
+        return {"dwelling": True, "above_summary": ""}
+    order = sorted(levels, reverse=True)
+    parts = [f"Roof above: {levels[order[0]]} rooms"]
+    parts += [f"{levels[lower]} under the {levels[upper]}" for upper, lower in zip(order, order[1:])]
+    return {"dwelling": True, "above_summary": "; ".join(parts) + "."}
+
+
 def apply_roof_answer(web, project, *, defer_evidence_rebuild=False):
     """Answer every open roof question with the job-level answer (one answer per tenancy, not per room)."""
-    from backend import autonomous_tasks_service
+    from backend import autonomous_tasks_service, house_windows_service
+    if house_windows_service.is_dwelling(_root(project)):
+        return 0        # a house's levels decide what is over each room; the tenancy answer never applies to it
     above = job_setup(project).get("above", "")
     answer = ROOF_ANSWER.get(above)
     if not answer:
@@ -456,6 +485,7 @@ def status(web, project):
         "name": setup.get("name") or str(project.get("name") or "").removesuffix(".pdf"),
         "address": address, "found_site": found_site,
         "building_type": setup.get("building_type", ""), "above": setup.get("above", ""),
+        **house_above(root),
         **_weather_choice(root, setup, address or found_site),
         **progress_facts,
         "rooms": {"total": len(candidates), "included": len(included), "with_area": len(with_area)},
@@ -468,6 +498,10 @@ _RESULT_FACTS = {}
 _RESULT_FACTS_LOCK = threading.Lock()
 RESULT_FILES = ("ai_preliminary_input_set.json", "phase1_base_room_load_report.json",
                 "hourly_ai_preliminary_load_report.json", "ai_preliminary_model.json")
+# The facts are also saved beside the job, so the first jobs list after a server restart doesn't re-read every job's
+# large result files (~5 s on 26 jobs). Bump the version whenever the facts below change shape or meaning.
+RESULT_FACTS_FILE = "job_list_facts.cache"
+RESULT_FACTS_VERSION = 1
 
 
 def _saved_result_facts(root):
@@ -488,6 +522,13 @@ def _saved_result_facts(root):
         hit = _RESULT_FACTS.get(key)
         if hit and hit[0] == version:
             return hit[1]
+    saved = _read(root / RESULT_FACTS_FILE, {})
+    disk_version = json.loads(json.dumps(version))         # tuples as the saved JSON lists them
+    if (isinstance(saved, dict) and saved.get("schema") == RESULT_FACTS_VERSION
+            and saved.get("version") == disk_version and isinstance(saved.get("facts"), dict)):
+        with _RESULT_FACTS_LOCK:
+            _RESULT_FACTS[key] = (version, saved["facts"])
+        return saved["facts"]
     input_set, base_report, full_report, model = (_read(root / name, {}) for name in RESULT_FILES)
     input_set, base_report, full_report, model = (value if isinstance(value, dict) else {}
                                                   for value in (input_set, base_report, full_report, model))
@@ -510,6 +551,10 @@ def _saved_result_facts(root):
     }
     with _RESULT_FACTS_LOCK:
         _RESULT_FACTS[key] = (version, facts)
+    try:
+        _write(root / RESULT_FACTS_FILE, {"schema": RESULT_FACTS_VERSION, "version": version, "facts": facts})
+    except OSError:
+        pass                                                # the in-memory copy still serves this server run
     return facts
 
 

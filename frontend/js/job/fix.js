@@ -95,7 +95,7 @@ function content(data, projectId) {
     ...windowRooms.map((room) => windowRow(room.label, room.name, room.windows, room.window_fix || {}, data)),
   ].join("");
   return `<section class="job-panel" aria-labelledby="fix-title">
-      <h1 id="fix-title">Quick fixes</h1>
+      <h1 id="fix-title">Fix rooms and windows</h1>
       <p>Correct what the drawings got wrong. Nothing is read again: saving updates the load in a few seconds.
       Renaming a room changes the name shown here and in the report; set its use and people in their own columns.</p>
     </section>
@@ -217,6 +217,23 @@ export async function renderFix(projectId) {
           select.closest(".job-fix-shade").querySelector(".job-fix-other").hidden = !select.value || select.value === "none";
         });
       });
+      // Unsaved fixes aren't lost by accident: closing or reloading the tab, or leaving for another screen, asks first.
+      let dirty = false;
+      const warnUnload = (event) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
+      const guardLinks = (event) => {
+        const link = event.target.closest("a[href]");
+        if (!dirty || !link || form.contains(link)) return;
+        if (!window.confirm("Leave without saving your fixes? They will be lost.")) event.preventDefault();
+      };
+      const stop = () => {
+        window.removeEventListener("beforeunload", warnUnload);
+        document.removeEventListener("click", guardLinks, true);
+        window.removeEventListener("hashchange", stop);
+      };
+      form.addEventListener("input", () => { dirty = true; });
+      window.addEventListener("beforeunload", warnUnload);
+      document.addEventListener("click", guardLinks, true);
+      window.addEventListener("hashchange", stop);
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const changes = collectChanges(form, data);
@@ -228,10 +245,11 @@ export async function renderFix(projectId) {
         line.textContent = "Saving…";
         try {
           const saved = await sendJson("/api/quick-fix", { project_id: projectId, ...changes, reviewer: "Quick fixes" });
+          dirty = false;
           line.textContent = `Saved: ${saved.applied.join(" ")} Updating the load…`;
           const status = data.status || {};
           if (status.phase1_complete || status.result_exists)
-            await runCalculation(projectId, "phase1_base_room", line, "Updating the empty-room load…");
+            await runCalculation(projectId, "phase1_base_room", line, "Updating the building load…");
           if (status.phase2_complete || status.results_ready || status.result_exists) {
             await runCalculation(projectId, "full", line, "Updating the final load…");
             navigate(projectId, "results");

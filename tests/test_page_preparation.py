@@ -67,6 +67,18 @@ class PagePreparationTests(unittest.TestCase):
         self.assertIn("seconds", done)
         saved = json.loads((self.root / service.JOB_FILE).read_text())
         self.assertEqual(saved["status"], "done")
+        self.assertEqual(list(saved["timing"]), ["pages", "drawings", "checks"])
+        self.assertTrue(all(isinstance(value, float) and value >= 0 for value in saved["timing"].values()))
+
+    def test_the_survey_bearings_are_read_beside_the_page_steps_only_when_checks_run(self):
+        for run_checks, expected in ((True, 1), (False, 0)):
+            with self.subTest(run_checks=run_checks):
+                web = FakeWeb(self.root)
+                with patch.object(autonomous_tasks_service, "run_all"), \
+                        patch.object(service, "_warm_survey_bearings") as warm:
+                    service.start(web, web.project, {"pages": PAGES, "run_checks": run_checks})
+                    wait_until_finished(web.project)
+                self.assertEqual(warm.call_count, expected)
 
     def test_a_failed_step_is_reported_with_its_reason_and_the_later_steps_do_not_run(self):
         web = FakeWeb(self.root, fail_on="pages")
@@ -74,6 +86,7 @@ class PagePreparationTests(unittest.TestCase):
             service.start(web, web.project, {"pages": PAGES})
             failed = wait_until_finished(web.project)
         self.assertEqual((failed["status"], failed["step"], failed["error"]), ("failed", "pages", "Page 20 could not be read."))
+        self.assertEqual(list(failed["timing"]), ["pages"])
         run_all.assert_not_called()
         web = FakeWeb(self.root, fail_on="drawings")
         with patch.object(autonomous_tasks_service, "run_all") as run_all:

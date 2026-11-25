@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from backend import ai_preliminary_service, calculation_service as service, job_service
+from backend import ai_preliminary_service, calculation_service as service, drawing_tasks_service as drawings, job_service
 
 SCOPE = {"candidate_fingerprint": "fp", "candidates": [
     {"key": "kitchen", "area_m2": 104.9, "include": True, "status": "calculated"},
@@ -49,6 +49,29 @@ class CalculationJobTests(unittest.TestCase):
     def tearDown(self):
         service._RUNNING.clear()
         self.temp.cleanup()
+
+    def test_handoff_sends_new_questions_then_restarts_affected_review(self):
+        with patch.object(drawings, "_waiting", return_value=[{"task": "P8_glazing_certificate", "target": "page-3"}]), \
+                patch.object(drawings, "start") as start, \
+                patch.object(service, "_phase1_drawing_problems", return_value=[]), \
+                patch("backend.job_progress.stage_blocker", return_value=""), \
+                patch("backend.ai_provider.configured", return_value=True):
+            service.maybe_start_phase1(self.web, self.web.project)
+        start.assert_called_once_with(self.web, self.web.project, then_skills=True)
+
+    def test_handoff_runs_one_automatic_follow_up_pass_then_leaves_the_button(self):
+        waiting = [[{"task": "P8_glazing_certificate", "target": "page-3"}],
+                   [{"task": "P0_outline_corners", "target": "room-family-page-6"}]]
+        with patch.object(drawings, "_waiting", side_effect=lambda root: waiting[0]), \
+                patch.object(drawings, "start") as start, \
+                patch.object(service, "_phase1_drawing_problems", return_value=["drawings"]), \
+                patch("backend.job_progress.stage_blocker", return_value=""), \
+                patch("backend.ai_provider.configured", return_value=True):
+            service.maybe_start_phase1(self.web, self.web.project)
+            service.maybe_start_phase1(self.web, self.web.project)     # the same questions: not sent twice
+            waiting.pop(0)
+            service.maybe_start_phase1(self.web, self.web.project)     # new questions after the pass: no loop
+        self.assertEqual(start.call_count, 1)
 
     def patches(self, assemble_errors=()):
         errors = list(assemble_errors)
@@ -122,6 +145,15 @@ class CalculationJobTests(unittest.TestCase):
         self.assertNotIn("rooms", [call[0] if isinstance(call, tuple) else call for call in self.calls])
         self.assertIn(("calculate", "phase1_base_room"), self.calls)
 
+    def test_current_input_set_skips_the_extra_assembly(self):
+        from backend import skill_workflow_service
+        (self.root / "ai_preliminary_input_set.json").write_text(json.dumps({"material": {"hourly_load_model": {"rooms": []}}}))
+        with patch.object(ai_preliminary_service, "_stale_reasons", return_value=[]), \
+                patch.object(skill_workflow_service, "take_in_downstream"):
+            _, done = self.run_job({})
+        self.assertEqual(done["status"], "done")
+        self.assertNotIn("model", self.calls)
+
     def test_a_finished_calculation_records_the_review_it_used_as_current(self):
         from backend import skill_workflow_service
         (self.root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "r7", "scope": "phase1_envelope"}))
@@ -130,6 +162,17 @@ class CalculationJobTests(unittest.TestCase):
         self.assertEqual(done["status"], "done")
         take_in.assert_called_once()
         self.assertEqual(take_in.call_args.args[1], "r7")
+
+    def test_a_calculation_that_stops_after_rebuilding_the_model_still_takes_in_the_review(self):
+        # Turramurra (2026-11-18): the model was rebuilt from the review's answers, then the calculation failed
+        # ("Missing required artifacts: hourly load model"), and the review looked out of date.
+        from backend import skill_workflow_service
+        (self.root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "r8", "scope": "phase1_envelope"}))
+        with patch.object(skill_workflow_service, "take_in_downstream") as take_in:
+            _, failed = self.run_job({}, assemble_errors=[ValueError("Analyse the PDF before assembling an AI preliminary model.")])
+        self.assertEqual(failed["status"], "failed")
+        take_in.assert_called_once()
+        self.assertEqual(take_in.call_args.args[1], "r8")
 
     def test_the_jobs_phase_one_note_is_added_to_the_reports_own_note_not_written_over_it(self):
         own = "Shop: every wall and the ceiling face conditioned space, so its envelope load is 0 kW."

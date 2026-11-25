@@ -14,6 +14,8 @@ Coordinates: vision models answer on their own 0–1000 grid over an image whate
 plan as 0–1000, which made every room about 45 % of its area). So when the AI answers, the prompt asks for that grid
 and the reply's pixel fields (*_px) are converted to the image's pixels before the checker sees them: by the one
 image's size, or for the north arrow by the size of the crop it chose. Where neither applies, nothing is converted.
+Claude models are the exception: they answer in the image's own pixels even when asked for the grid, so they are asked
+for pixels and their replies are not converted (answers_in_pixels).
 
 Started after the equipment reading; the skills start when it finishes, so the room skills see the traced rooms.
 Every call is logged in the job's ai_usage.jsonl under "drawing:<task>" with its cost.
@@ -47,6 +49,8 @@ _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-drawing-tasks",
 # What each drawing task is doing, in the words the Drawings screen shows.
 TASK_LABELS = {
     "P0_dimensions": "Reading the scale from a printed dimension",
+    "P0_scale_read": "Reading the printed scale",
+    "P0_scale_objects": "Estimating the scale from standard objects",
     "P0_wall_styles": "Telling the wall styles apart",
     "P0_room_names": "Finding the room names",
     "P0_room_outlines": "Tracing the room outlines",
@@ -76,13 +80,22 @@ def _seconds_since(stamp):
         return None
 
 
+def _not_needed_row(row, task_records):
+    """A drawing question that wasn't needed, in the screen's words. A way of finding the scale that gave nothing
+    usable is a fallback (the next way is used), not "not needed"; its reason is a plain sentence, never the checker's
+    instruction to the AI (records saved before 2026-11-18 have that in block_reason)."""
+    fallback = row["task"] in task_records.SCALE_FALLBACK_TASKS and bool((row.get("applied_value") or {}).get("fallback_required"))
+    reason = task_records.scale_fallback_reason(row["task"], row.get("target")) if fallback else row.get("block_reason", "")
+    return {"task": row["task"], "target": row["target"], "status": "not_needed", "fallback": fallback,
+            "label": TASK_LABELS.get(row["task"], "Drawing check"), "reason": reason}
+
+
 def status(web, project):
     job = _JOB.status(project)
     # A supervisor or manual reply may have repaired a task since this job finished.
     # Reconcile the response only; retain the original run's failure history on disk.
     from backend import autonomous_tasks_service as task_records
-    job["not_needed_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_needed",
-                                "label": TASK_LABELS.get(row["task"], "Drawing check"), "reason": row.get("block_reason", "")}
+    job["not_needed_tasks"] = [_not_needed_row(row, task_records)
                                for row in task_records._all_current(Path(project["review_dir"])) if row.get("status") == "not_needed"]
     job["not_answered_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_answered",
                                   "label": TASK_LABELS.get(row["task"], "Drawing check"),
@@ -101,6 +114,9 @@ def status(web, project):
                            "message": "The reply did not pass the drawing checks; completed tasks are kept."}
             unresolved.append(failure)
         job["unresolved"] = unresolved
+    supervisor_limit = read_json(Path(project["review_dir"]) / "phase1_supervisor_job.json").get("provider_limited")
+    if supervisor_limit:
+        job["provider_limited"] = True
     if job.get("provider_limited"):
         job["warning"] = "The drawing provider's usage limit was reached. Unanswered tasks are saved; retry after the limit resets."
     if job.get("status") == "done" and (job.get("unresolved") or job.get("provider_limited")):
@@ -111,11 +127,19 @@ def status(web, project):
         # offer to resume rather than leave the job at the drawings stage (Butcher Buffet 2026-10-26). No AI call is
         # started from here.
         from backend.job_runner import recovery
-        count = len(_waiting(Path(project["review_dir"])))
+        root = Path(project["review_dir"])
+        count = len(_waiting(root))
         job["waiting_tasks"] = count
-        job["recovery"] = {**recovery("failed"), "action": "resume", "label": "Check and resume",
-                           "reason": f"{count} drawing question{'s' if count != 1 else ''} added after the last run "
-                                     f"{'are' if count != 1 else 'is'} waiting to be sent."}
+        from backend.job_progress import in_flight
+        supervisor = read_json(root / "phase1_supervisor_job.json")
+        calculation = read_json(root / "calculation_job.json")
+        if not supervisor.get("provider_limited") and (in_flight(supervisor) or in_flight(calculation)):
+            job["follow_up_sender"] = "model check" if in_flight(supervisor) else "calculation"
+            job.pop("recovery", None)
+        else:
+            job["recovery"] = {**recovery("failed"), "action": "resume", "label": "Check and resume",
+                               "reason": f"{count} drawing question{'s' if count != 1 else ''} added after the last run "
+                                         f"{'are' if count != 1 else 'is'} waiting to be sent."}
     # Ages worked out here, so the screen doesn't depend on the browser's clock.
     if job.get("status") in {"queued", "running"}:
         job["request_seconds"] = _seconds_since(job.get("request_started_at")) if job.get("request_started_at") else None
@@ -242,8 +266,20 @@ def _grid_size(task, reply, sizes):
 NO_GRID_TASKS = {"P0_room_sizes", "P0_outline_corners"}   # the corner question answers in corner numbers
 
 
-def uses_grid(task, sizes):
-    if task in NO_GRID_TASKS:
+def answers_in_pixels(provider):
+    """True for a model that answers in the image's own pixels whatever the prompt asks: Claude. On the 2026.08.06 set
+    (2026-11-18) Claude Haiku 5.5 was asked for the 0-1000 grid on a 1,536 x 1,106 plan and answered in pixels (its own
+    note put the house's east wall at "x≈1022", and one corner was at x 1024, off the grid); converting those as grid
+    values moved every point right by half again and down by a tenth, so the "Living" sketch landed on the east wing's
+    bedrooms (78.2 m²) and the "Bedroom" sketch on the kitchen. The Turramurra tenancy reached x 1789 on a 1,536-px
+    image the same way. Such a model is asked for pixels (the tasks' own wording) and its reply is not converted."""
+    model = str(getattr(provider, "model", "") or "").casefold()
+    name = str(getattr(provider, "name", "") or "").casefold()
+    return "claude" in model or name == "anthropic"
+
+
+def uses_grid(task, sizes, provider=None):
+    if task in NO_GRID_TASKS or (provider is not None and answers_in_pixels(provider)):
         return False
     return len(sizes) == 1 or (task == "P2_north" and len(sizes) > 1) or (task in FIRST_IMAGE_TASKS and bool(sizes))
 
@@ -258,6 +294,27 @@ def to_pixels(value, size, key=""):
             return [round(value[0] * size[0] / 1000, 1), round(value[1] * size[1] / 1000, 1)]
         return [to_pixels(item, size, key) for item in value]
     return value
+
+
+def _px_values(value, key=""):
+    if isinstance(value, dict):
+        return [number for name, item in value.items() for number in _px_values(item, name)]
+    if isinstance(value, list):
+        if key.endswith("_px"):
+            return [item for item in value if isinstance(item, (int, float)) and not isinstance(item, bool)] + \
+                [number for item in value if isinstance(item, (list, dict)) for number in _px_values(item, key)]
+        return [number for item in value for number in _px_values(item, key)]
+    return []
+
+
+def grid_to_pixels(reply, size):
+    """to_pixels for a reply asked on the 0-1000 grid. A reply with a *_px value beyond 1000 can't be on that grid (the
+    model answered in pixels anyway), so it is left as it is rather than stretched off the image."""
+    if not size:
+        return reply
+    if any(number > 1000 for number in _px_values(reply)):
+        return reply
+    return to_pixels(reply, size)
 
 
 def _prompt(record, grid=False):
@@ -275,7 +332,36 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
     """Answer the waiting drawing tasks in rounds. Returns {"answered", "refused", "rounds", "calls"}.
 
     provider_for(task) gives the provider for a task (tests pass a fake); by default ai_provider.get("drawing:<task>").
-    retry_not_answered: the operator's deliberate retry also asks again the questions refused twice before."""
+    retry_not_answered: the operator's deliberate retry also asks again the questions refused twice before.
+
+    The calculation evidence (about half a minute to rebuild on a house set) isn't rebuilt after every round: a round
+    that applied answers marks it stale, a question that reads the traced areas rebuilds it first, and it is rebuilt
+    once at the end (also when the run stops on an error, so completed answers reach it; not when it is cancelled)."""
+    from backend import autonomous_tasks_service
+    from backend.job_runner import JobCancelled
+
+    def build_evidence():
+        if web is not None:
+            from backend.phase1_supervisor_service import _build_calculation_evidence
+            _build_calculation_evidence(web, project)
+
+    with autonomous_tasks_service.deferred_evidence_rebuild(build_evidence) as evidence:
+        try:
+            result = _answer_rounds(web, project, step, provider_for, retry_not_answered)
+        except JobCancelled:
+            raise
+        except BaseException:
+            try:
+                autonomous_tasks_service.ensure_evidence_current()
+            except Exception as error:       # the run's own error is the one to report
+                print(f"Couldn't rebuild the calculation evidence after the drawing tasks stopped: {error}", flush=True)
+            raise
+        autonomous_tasks_service.ensure_evidence_current()
+    result["evidence_rebuilds"] = evidence["builds"]
+    return result
+
+
+def _answer_rounds(web, project, step, provider_for, retry_not_answered):
     from backend import autonomous_tasks_service
     root = Path(project["review_dir"])
     provider_for = provider_for or (lambda task: ai_provider.get(f"drawing:{task}"))
@@ -306,8 +392,8 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
             tried[record["run_id"]] = tried.get(record["run_id"], 0) + 1
             images = _images(root, record)
             sizes = _sizes(images)
-            grid = uses_grid(record["task"], sizes)
             provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
+            grid = uses_grid(record["task"], sizes, provider)
             prompt = _prompt(record, grid)
             key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
                 [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
@@ -419,8 +505,8 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
                     break
                 continue
             images, sizes = result["images"], result["sizes"]
-            grid = uses_grid(record["task"], sizes)
             provider, reply = result["provider"], result["reply"]
+            grid = uses_grid(record["task"], sizes, provider)
             if result["cached"]:
                 reused_replies += 1
             else:
@@ -437,7 +523,7 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
             if reply is not None:
                 size = _grid_size(record["task"], reply, sizes) if grid else None
                 if size:
-                    reply = to_pixels(reply, size)
+                    reply = grid_to_pixels(reply, size)
             try:
                 autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
                                                                  "target": record["target"], "reply": json.dumps(reply),
@@ -466,9 +552,8 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
             if web is not None and any(row["task"] == "S1_printed_areas" for row in waiting):
                 from backend import room_use_resolution_service
                 room_use_resolution_service.post(web, project, {"action": "resolve"})
-            if web is not None:
-                from backend.phase1_supervisor_service import _build_calculation_evidence
-                _build_calculation_evidence(web, project)
+            # Marked stale; rebuilt when a question reads the traced areas, and once at the end (answer_all).
+            autonomous_tasks_service.evidence_changed(web, project)
             # The questions are rebuilt once, by the next round's run_all (or after the last round, below).
             from backend import productization
             productization.record_change_if_fingerprint_changed(root, action="autonomous_drawing_round_applied",
@@ -543,8 +628,8 @@ def request_investigation(project, record, provider_for=None, check=None):
         root = Path(project["review_dir"])
         images = _images(root, record)
         sizes = _sizes(images)
-        grid = uses_grid(record["task"], sizes)
         provider = (provider_for or (lambda task: ai_provider.get(f"drawing:{task}")))(record["task"])
+        grid = uses_grid(record["task"], sizes, provider)
         prompt = _prompt(record, grid)
         key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
             [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
@@ -559,7 +644,7 @@ def request_investigation(project, record, provider_for=None, check=None):
             _write_json(cached_path, {"reply": reply, "raw": raw})
         checkpoint()
         size = _grid_size(record["task"], reply, sizes) if grid else None
-        return {"reply": to_pixels(reply, size) if size else reply, "raw": raw,
+        return {"reply": grid_to_pixels(reply, size), "raw": raw,
                 "cache_path": str(cached_path), "reused": reused}
     finally:
         _context.check = previous_check

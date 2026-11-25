@@ -6,6 +6,7 @@ import math
 import logging
 import re
 import threading
+from collections import OrderedDict
 from functools import lru_cache
 from copy import deepcopy
 from pathlib import Path
@@ -63,10 +64,50 @@ def _page_fp(page):
     return fingerprint(page or {})
 
 
+_PAGE_FINGERPRINTS = OrderedDict()
+_PAGE_FINGERPRINTS_LOCK = threading.Lock()
+
+
+def _vector_page_index(paths):
+    """({page: fingerprint}, {page: the page's image size and render reference}) for vector_geometry.json, worked out
+    once per version of the file. The file is ~90 MB on a house set; the plan screen needs only each page's size and
+    fingerprint, and re-reading it took about half a second of every /api/job-plan call (2026-11-20)."""
+    path = Path(paths["vector"])
+    try:
+        stat = path.stat()
+        key = (str(path.resolve()), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
+    except OSError:
+        key = None
+    with _PAGE_FINGERPRINTS_LOCK:
+        if key is not None and key in _PAGE_FINGERPRINTS:
+            _PAGE_FINGERPRINTS.move_to_end(key)
+            fingerprints, summaries = _PAGE_FINGERPRINTS[key]
+            return dict(fingerprints), deepcopy(summaries)
+    pages = _vector_pages(paths)
+    fingerprints = reviewer_room_geometry.vector_page_fingerprints(pages)
+    summaries = {row.get("page"): {"page": row.get("page"), "image": row.get("image"),
+                                   "coordinate_systems": {"image_px": deepcopy((row.get("coordinate_systems") or {}).get("image_px", {}))}}
+                 for row in pages if isinstance(row, dict)}
+    if key is not None:
+        with _PAGE_FINGERPRINTS_LOCK:
+            _PAGE_FINGERPRINTS[key] = (fingerprints, summaries)
+            while len(_PAGE_FINGERPRINTS) > 8:
+                _PAGE_FINGERPRINTS.popitem(last=False)
+    return dict(fingerprints), deepcopy(summaries)
+
+
+def _vector_page_fingerprints(paths):
+    """Each vector page's fingerprint, worked out once per version of vector_geometry.json. Checking the current traces
+    used to re-read the whole file (~90 MB on a house set) and fingerprint a page per trace, about ten times a round of
+    drawing questions (Turramurra 2026-11-18)."""
+    return _vector_page_index(paths)[0]
+
+
 def current_records(paths, artifact=None):
     artifact = artifact if isinstance(artifact, dict) else _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
     checked = reviewer_room_geometry.validate_artifact(artifact)
-    active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), _vector_pages(paths))
+    active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), [],
+                                                   page_fingerprints=_vector_page_fingerprints(paths))
     rooms = _rooms(paths)
     return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
 
@@ -79,9 +120,9 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
     paths = _paths(project)
     current_artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
     pdf_fp = _source_pdf_fingerprint(paths)
-    vectors = {row.get("page"): row for row in _vector_pages(paths) if isinstance(row, dict)}
+    vector_fps = _vector_page_fingerprints(paths)
     room_lookup = {row.get("room_id"): row for row in _rooms(paths)}
-    current = reviewer_room_geometry.active_records(current_artifact, pdf_fp, list(vectors.values()))
+    current = reviewer_room_geometry.active_records(current_artifact, pdf_fp, [], page_fingerprints=vector_fps)
     human_room_ids = {row.get("room_id") for row in current if row.get("declaration_source", "reviewer") == "reviewer"}
     prepared = []
     for row in rows:
@@ -89,7 +130,7 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
         room = room_lookup.get(room_id)
         if not room or room_id in human_room_ids:
             continue
-        if page not in vectors or not isinstance(points, list) or len(points) < 4:
+        if page not in vector_fps or not isinstance(points, list) or len(points) < 4:
             raise ValueError("AI room outline does not reference a current room and plan page.")
         calibration = deepcopy(row.get("calibration") or {})
         from ai.autonomous_tasks import usable_calibration
@@ -100,7 +141,7 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
             "page": page, "points_image_px": points, "snapped_line_ids": row.get("snapped_line_ids", [None] * len(points)),
             "calibration": calibration, "reviewer": "Archie AI (P0)", "note": row.get("note", ""),
             "status": "geometry_proposed", "created_at": ai_preliminary.now(),
-            "source_fingerprints": {"source_pdf": pdf_fp, "vector_page": _page_fp(vectors[page])},
+            "source_fingerprints": {"source_pdf": pdf_fp, "vector_page": vector_fps[page]},
             "declaration_source": "ai_determined", "ai_run_id": ai_run_id,
             "ai_quality_label": quality_label, "part_index": int(row.get("part_index", 1)),
             "part_count": int(row.get("part_count", 1)), "method": row.get("method", "ai_outline_snapped"),
@@ -131,6 +172,80 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
             target=paths["artifact"].name, previous_fingerprint=previous, new_fingerprint=validated.get("fingerprint", ""),
             affected_ids=[row["room_id"] for row in prepared])
     return prepared
+
+
+def split_repeated_room_traces(root):
+    """Migrate a saved job whose separate same-named rooms were saved as one room in parts (Turramurra's three
+    first-floor Ensuite outlines were parts 1-3 of one 16.4 m² "Ensuite", 2026-11-18).
+
+    No AI is asked: the saved AI outlines are regrouped with the rule the outline steps now use
+    (autonomous_tasks_service.number_repeated_rooms), each separate room becomes "Ensuite (1)", "Ensuite (2)", ... in
+    plan reading order, and the numbered rooms are recorded (ai_named_rooms.json) so the room list replaces the merged
+    record. Trace IDs are kept, so a wall, window or roof answer saved on an outline stays on that outline. A
+    reviewer's own trace is never regrouped. Idempotent: a job with nothing to split is not written. Returns
+    {old room ID: [new room IDs]}."""
+    from backend import house_windows_service, room_proposal
+    from backend.autonomous_tasks_service import number_repeated_rooms
+    from shapely.geometry import Polygon
+    from ai.page_inventory import level_key
+    root = Path(root)
+    paths = _paths({"review_dir": str(root)})
+    if not paths["artifact"].exists() or not house_windows_service.is_dwelling(root):
+        return {}
+    try:
+        artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
+    except ValueError:
+        return {}
+    groups = {}
+    for index, row in enumerate(artifact.get("records", [])):
+        if row.get("declaration_source") not in {"ai_determined", "ai_fallback"} or not row.get("room_id"):
+            continue
+        groups.setdefault((str(row["room_id"]), row.get("page"), str(row.get("ai_run_id") or "")), []).append(index)
+    rooms = None
+    split = {}
+    records = artifact["records"]
+    for (room_id, page, run_id), indexes in sorted(groups.items(), key=lambda item: (item[0][0], str(item[0][1]), item[0][2])):
+        if len(indexes) < 2 or type(page) is not int:
+            continue
+        shapes = []
+        for index in indexes:
+            try:
+                shape = Polygon(records[index]["points_image_px"])
+                shapes.append(shape if shape.is_valid and shape.area > 0 else None)
+            except (TypeError, ValueError, KeyError):
+                shapes.append(None)
+        mm = [float((records[index].get("calibration") or {}).get("mm_per_px") or 0) for index in indexes]
+        if None in shapes or not all(value > 0 for value in mm):
+            continue
+        rooms = _rooms(paths) if rooms is None else rooms
+        level = records[indexes[0]].get("level_name") or "Unassigned level"
+        label = records[indexes[0]].get("room_label") or ""
+        printed = [room.get("label", "") for room in rooms if level_key(room.get("level_name")) == level_key(level)]
+        renamed, numbered = number_repeated_rooms([(label, shape) for shape in shapes], mm[0], printed)
+        if not numbered:
+            continue
+        counts = {}
+        for position, index in enumerate(indexes):
+            new_label = renamed.get(position, label)
+            counts[new_label] = counts.get(new_label, 0) + 1
+            records[index].update({"room_id": room_identity(new_label, level), "room_label": new_label,
+                                   "part_index": counts[new_label]})
+        for index in indexes:
+            records[index]["part_count"] = counts[records[index]["room_label"]]
+        room_proposal.save_numbered_rooms(root, f"P0_numbered_repeat:saved_outlines:{room_id}", page, level, numbered,
+                                          run_id or "saved-outlines")
+        split[room_id] = sorted({room_identity(new_label, level) for new_label, _base in numbered})
+        rooms = None                    # the room list now has the numbered rooms
+    if split:
+        previous = artifact.get("fingerprint", "")
+        validated = reviewer_room_geometry.validate_artifact({"records": records,
+            "page_north": artifact.get("page_north", {}), "rooms": artifact.get("rooms", [])})
+        _atomic_json(paths["artifact"], validated)
+        from backend import productization
+        productization.record_change_if_fingerprint_changed(root, action="repeated_room_names_split",
+            target=paths["artifact"].name, previous_fingerprint=previous, new_fingerprint=validated.get("fingerprint", ""),
+            affected_ids=sorted({*split, *(room for rooms_ in split.values() for room in rooms_)}))
+    return split
 
 
 _ARTIFACT_INPUT_MEMO = {}
@@ -307,35 +422,76 @@ def current_traced_areas(root):
     # printed area, printed dimensions, an AI estimate off the plan, or the tenancy remainder).
     pointers = [*(paths["root"] / "ai_tasks" / "S1_printed_areas").glob("*/current.json"),
                 *(paths["root"] / "ai_tasks" / "P0_room_sizes").glob("*/current.json")]
+    answers = []
     for pointer in pointers:
         current = _read(pointer, {})
         record = _read(pointer.parent / current.get("run_path", "") / "record.json", {})
-        if record.get("status") not in {"applied", "below_accuracy_bar"}:
-            continue
+        if pointer.parent.parent.name == "P0_room_sizes":
+            answers.extend(room_size_answers(pointer.parent, record))
+        elif record.get("status") in {"applied", "below_accuracy_bar"}:
+            answers.extend((record, area) for area in record.get("applied_value", {}).get("rooms", []))
+    for record, area in answers:
         page = record.get("packet", {}).get("page")
-        for area in record.get("applied_value", {}).get("rooms", []):
-            if not isinstance(area, dict) or not area.get("label"):
-                continue
-            label = str(area["label"]).strip()
-            level = str(area.get("level_name") or "Unassigned level")
-            identity = room_identity(label, level)
-            room = rooms_by_identity.get(identity, {})
-            room_id = str(room.get("room_id") or identity)
-            previous = result.get(room_id)
-            area_source = str(area.get("source") or "printed (read from image)")
-            if not area_only_may_replace(previous, area_source):
-                continue
-            result[room_id] = {"room_id": room_id, "room_label": room.get("label") or label,
-                "level_name": room.get("level_name") or level, "area_m2": area.get("area_m2"),
-                "area_source": area_source, "source": area_source,
-                "page": page, "source_pages": [page] if type(page) is int else [],
-                "area_only": True, "outline": None, "trace_id": "", "proof_id": "",
-                "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
-                "declaration_source": "ai_determined", "ai_run_id": record.get("run_id"),
-                "ai_quality_label": area.get("quality_label") or record.get("quality_label", "AI-determined"),
-                "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
+        if not isinstance(area, dict) or not area.get("label"):
+            continue
+        label = str(area["label"]).strip()
+        level = str(area.get("level_name") or "Unassigned level")
+        identity = room_identity(label, level)
+        room = rooms_by_identity.get(identity, {})
+        room_id = str(room.get("room_id") or identity)
+        previous = result.get(room_id)
+        area_source = str(area.get("source") or "printed (read from image)")
+        if not area_only_may_replace(previous, area_source):
+            continue
+        result[room_id] = {"room_id": room_id, "room_label": room.get("label") or label,
+            "level_name": room.get("level_name") or level, "area_m2": area.get("area_m2"),
+            "area_source": area_source, "source": area_source,
+            "page": page, "source_pages": [page] if type(page) is int else [],
+            "area_only": True, "outline": None, "trace_id": "", "proof_id": "",
+            "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
+            "declaration_source": "ai_determined", "ai_run_id": record.get("run_id"),
+            "ai_quality_label": area.get("quality_label") or record.get("quality_label", "AI-determined"),
+            "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
     from backend.job_service import area_overrides
     return apply_area_overrides(result, area_overrides(paths["root"]))
+
+
+def room_size_answers(target_dir, current_record):
+    """[(record, area)] for one plan's room-size step: each room's area from the latest answer that asked about it.
+
+    The room-size step keeps one current record per plan page, and a follow-up question asks only the rooms still
+    without an area. Reading the current record alone dropped every room the follow-up didn't ask: on the Turramurra
+    house (2026-11-18) the ground floor's first answer sized Kitchen, Entry, Media, Scullery and Bedroom 5, a follow-up
+    for Sitting alone replaced it, and those five cooled rooms fell out of the room model (the next round asked them
+    again, then lost them again). Earlier answers count only when they were asked at the same plan scale and level as
+    the current question; a room a later answer was asked about takes that answer (found or not found)."""
+    if current_record.get("status") not in {"applied", "below_accuracy_bar"} and not current_record.get("packet"):
+        return []
+    current_packet = current_record.get("packet") or {}
+    same_basis = lambda packet: (packet.get("page") == current_packet.get("page")
+                                 and packet.get("mm_per_image_px") == current_packet.get("mm_per_image_px")
+                                 and packet.get("level_name") == current_packet.get("level_name"))
+    records = []
+    for path in sorted(Path(target_dir).glob("runs/*/record.json")):
+        record = _read(path, {})
+        if record.get("run_id") == current_record.get("run_id"):
+            record = current_record
+        if record.get("task", "P0_room_sizes") != "P0_room_sizes" or not same_basis(record.get("packet") or {}):
+            continue
+        records.append(record)
+    if not any(row.get("run_id") == current_record.get("run_id") for row in records):
+        records.append(current_record)
+    records.sort(key=lambda row: (str(row.get("created_at", "")), str(row.get("run_id", ""))))
+    by_room = {}
+    for record in records:
+        if record.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
+        for name in (record.get("packet") or {}).get("room_names", []):
+            by_room.pop(str(name).casefold(), None)
+        for area in (record.get("applied_value") or {}).get("rooms", []):
+            if isinstance(area, dict) and area.get("label"):
+                by_room[str(area["label"]).casefold()] = (record, area)
+    return list(by_room.values())
 
 
 def area_only_may_replace(previous, area_source):
@@ -461,7 +617,7 @@ def _page_context(paths, web):
     ai_input = _read(paths["ai_input"], {})
     coverage = _read(paths["coverage"], {})
     level_method_current = has_current_level_classification(coverage)
-    vector_pages = {row.get("page"): row for row in _vector_pages(paths) if isinstance(row, dict)}
+    page_fingerprints, vector_pages = _vector_page_index(paths)
     coverage_pages = {row.get("page"): row for row in coverage.get("pages", []) if isinstance(row, dict)}
     role_pages = {row.get("page"): row for row in coverage.get("page_roles", []) if isinstance(row, dict)}
     drawing_pages = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", []) if isinstance(row, dict)}
@@ -517,7 +673,7 @@ def _page_context(paths, web):
                       "pdf_height_pt": height_pt,
                       "image_px_per_pt": image_width / width_pt if isinstance(image_width, (int, float)) and width_pt else None,
                       "image_width_px": image_width, "image_height_px": image_height,
-                      "vector_page_fingerprint": _page_fp(vector),
+                      "vector_page_fingerprint": page_fingerprints.get(number) or _page_fp(vector),
                       "preview_url": web.safe_link(preview_path) if preview_path else "",
                       "preview_width_px": image_width if preview_matches else None,
                       "preview_height_px": image_height if preview_matches else None,
@@ -571,6 +727,20 @@ def _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vect
 
 @lru_cache(maxsize=8)
 def _cached_pdf_sizes(source_pdf, inode, size, mtime_ns, ctime_ns):
+    """{page: (width, height) in points, after the page's rotation}. Read from the page boxes with pdfium without
+    loading the pages: 4 ms against about 4 s for pdfplumber parsing every page of a 30-page set (2026-11-20). The same
+    sizes as pdfplumber on all 19 job PDFs and on rotated pages, to the 4th decimal; pdfplumber if pdfium fails."""
+    try:
+        import pypdfium2 as pdfium
+        document = pdfium.PdfDocument(source_pdf)
+        try:
+            # pdfium reads the boxes as 32-bit floats; PDFs store them to a few decimals.
+            return {index + 1: tuple(round(float(value), 4) for value in document.get_page_size(index))
+                    for index in range(len(document))}
+        finally:
+            document.close()
+    except Exception:
+        pass
     try:
         import pdfplumber
         with pdfplumber.open(source_pdf) as pdf:
@@ -584,12 +754,12 @@ def _rooms(paths):
     building = _read(paths["building"], {})
     room_use = _read(paths["room_use"], {})
     run = _read(paths["run"], {})
-    from backend.room_proposal import room_proposal, numbered_bedroom_levels
+    from backend.room_proposal import is_replaced, replaced_repeated_labels, room_proposal
     proposal = room_proposal(run, paths["root"])
-    numbered_levels = numbered_bedroom_levels(paths["root"])
+    replaced = replaced_repeated_labels(paths["root"])
     def replaced_bedroom(row):
-        return (str(row.get("label") or row.get("name") or row.get("original_label") or "").strip().casefold()
-                in {"bedroom", "bed"} and str(row.get("level_name") or "Unassigned level").casefold() in numbered_levels)
+        # A merged record of one name printed on separate rooms, now numbered per room (Bedroom 1 / Ensuite (1)).
+        return is_replaced(row, replaced)
     geometry = _read(paths["geometry"], {})
     active_area_ids = {row.get("room_source_id") for row in geometry.get("entities", [])
                        if isinstance(row, dict) and row.get("kind") == "area"

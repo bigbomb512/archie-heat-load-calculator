@@ -10,6 +10,7 @@ from unittest.mock import patch
 from ai import ai_preliminary, equipment_heat as heat, internal_gains_resolution, room_use_resolution
 from ai.heat_loads import equipment_load
 from backend import ai_preliminary_service, page_extraction_service, result_status_service
+from tests.kitchen_fixture import cooled_kitchen
 
 OVEN = {"name": "Combi oven", "code": "E06", "quantity": 2, "room": "Kitchen", "rated_input_w": None, "heat_to_space_factor": None,
         "sensible_to_room_w": 1500.0, "latent_to_room_w": 900.0, "heat_reference": "Maker X combi 6-1/1 data sheet", "pages": [5]}
@@ -70,8 +71,8 @@ class DataSheetHeatTests(unittest.TestCase):
         self.assertIn("Data sheet: Maker X combi 6-1/1 data sheet", row["source"])
 
         building = {"spaces": [{"name": "Kitchen", "level_name": "Ground", "area_m2": 30, "evidence": [{"page": 2, "excerpt": "KITCHEN"}]}]}
-        room = {"kind": "room", "label": "Kitchen", "level_name": "Ground", "area_m2": 30, "preliminary_profile_id": "hospitality", "page": 2,
-                "equipment": [{**row, "evidence": [{"page": 5, "excerpt": "E06 Combi oven"}]}]}
+        room = cooled_kitchen({"kind": "room", "label": "Kitchen", "level_name": "Ground", "area_m2": 30, "preliminary_profile_id": "hospitality", "page": 2,
+                               "equipment": [{**row, "evidence": [{"page": 5, "excerpt": "E06 Combi oven"}]}]})
         drawing = {"rooms": [room]}
         use = room_use_resolution.resolve(building, proposal=drawing, source_fingerprints={})
         gains = internal_gains_resolution.resolve(building, proposal=drawing, room_use=use, pack=ai_preliminary.load_pack(),

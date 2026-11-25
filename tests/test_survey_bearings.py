@@ -1,9 +1,16 @@
 """North from a drawing set's boundary bearings (ai/survey_bearings.py) and its use with north arrows
 (ai/autonomous_tasks.true_north), and the north-arrow crops (north_crop_boxes)."""
 
+import json
+import os
+import threading
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from ai import autonomous_tasks, survey_bearings
+from tests.test_page_pool import write_text_pdf
 
 
 def label(bearing, direction, page=1):
@@ -81,6 +88,66 @@ class NorthCropTests(unittest.TestCase):
     def test_without_a_printed_north_the_bottom_band_is_checked(self):
         boxes = autonomous_tasks.north_crop_boxes(1000, 700)
         self.assertEqual(boxes, [(620, 434, 1000, 700), (0, 546, 620, 700), (620, 0, 1000, 266)])
+
+
+
+class LabelReadingTests(unittest.TestCase):
+    def test_labels_read_in_worker_processes_match_one_page_at_a_time(self):
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / "survey.pdf"
+            write_text_pdf(source, ["SITE 137?15'00\" BOUNDARY", "NO BEARINGS HERE", "REAR 227?15' FENCE 28?36'"])
+            with patch.dict(os.environ, {"ARCHIE_PAGE_WORKERS": "1"}):
+                sequential = survey_bearings.labels(source)
+                only_third = survey_bearings.labels(source, pages={3})
+            with patch.dict(os.environ, {"ARCHIE_PAGE_WORKERS": "3"}):
+                parallel = survey_bearings.labels(source)
+        self.assertEqual([(row["page"], row["bearing_deg"]) for row in sequential],
+                         [(1, 137.25), (3, 227.25), (3, 28.6)])
+        self.assertTrue(all(row["text_direction_deg"] == 90.0 for row in sequential))
+        self.assertEqual(parallel, sequential)
+        self.assertEqual(only_third, sequential[1:])
+
+
+
+class WarmSurveyAxisTests(unittest.TestCase):
+    def setUp(self):
+        from backend import autonomous_tasks_service, survey_axis_service
+        self.service, self.survey = autonomous_tasks_service, survey_axis_service
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.pdf = self.root / "set.pdf"
+        self.pdf.write_bytes(b"%PDF-1.4 stand-in")
+        (self.root / "ai_input.json").write_text(json.dumps({"source_pdf": str(self.pdf)}), encoding="utf-8")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_a_warmed_job_answers_the_north_check_without_reading_the_pdf_again(self):
+        with patch.object(survey_bearings, "labels", return_value=SET18) as read:
+            self.survey.warm(self.root, self.pdf)
+            axis = self.service._survey_axis(self.root)
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(axis, survey_bearings.axis(SET18))
+
+    def test_the_check_waits_for_a_reading_under_way_instead_of_repeating_it(self):
+        started, release = threading.Event(), threading.Event()
+
+        def slow_labels(pdf, pages=None):
+            started.set()
+            release.wait(5)
+            return SET18
+        with patch.object(survey_bearings, "labels", side_effect=slow_labels) as read:
+            warm = threading.Thread(target=self.survey.warm, args=(self.root, self.pdf))
+            warm.start()
+            started.wait(5)
+            answers = []
+            check = threading.Thread(target=lambda: answers.append(self.service._survey_axis(self.root)))
+            check.start()
+            release.set()
+            warm.join(5)
+            check.join(5)
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(answers, [survey_bearings.axis(SET18)])
 
 
 if __name__ == "__main__":

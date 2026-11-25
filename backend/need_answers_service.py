@@ -68,6 +68,14 @@ NOTE_KINDS = {"boundary": "What is beyond a wall (set on the Walls tab)", "other
 KINDS = {**{key: row["label"] for key, row in APPLIED_KINDS.items()}, **NOTE_KINDS}
 
 
+
+def _room_answer(rooms, label):
+    """A room's answer by its label. A room numbered from a name printed on separate rooms ("Ensuite (2)") takes an
+    answer given for that name before the rooms were told apart ("Ensuite") until it has its own."""
+    from ai.room_use_resolution import base_label
+    key = str(label or "").casefold()
+    return rooms.get(key) or rooms.get(base_label(label).casefold())
+
 def options(web, project):
     """What the answer form offers: kinds, rooms (name and level), equipment items and the roof choices."""
     from backend import ai_preliminary_service, job_service, page_extraction_service
@@ -89,8 +97,13 @@ def options(web, project):
     from backend.job_runner import read_json
     observed_walls = construction_u_values.plan_wall_legend(
         read_json(root / "spatial_ocr.json"), read_json(root / "page_inventory.json"))
+    from backend import house_windows_service
+    try:
+        dwelling = house_windows_service.is_dwelling(root)
+    except (OSError, ValueError, TypeError, KeyError):
+        dwelling = False
     return {"kinds": [{"id": key, "label": label, "applied": key in APPLIED_KINDS, "unit": APPLIED_KINDS.get(key, {}).get("unit", "")}
-                      for key, label in KINDS.items()],
+                      for key, label in KINDS.items() if not (dwelling and key == "roof_above")],
             "rooms": [{"label": label, "level": level} for label, level in room_rows],
             "equipment": equipment,
             "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key],
@@ -153,6 +166,10 @@ def apply(web, project, data):
         return {"applied": False, "summary": f"Kept as a note ({KINDS[kind].lower()}); not used by the calculation yet."}
     found = options(web, project)
     if kind == "roof_above":
+        from backend import house_windows_service
+        if house_windows_service.is_dwelling(Path(project["review_dir"])):
+            return {"applied": False, "summary": "Not used: in a house what is above each room follows from its level "
+                                                 "(the top floor is under the roof, a lower floor under the floor above)."}
         choice = str(data.get("value") or "")
         if choice not in {row["id"] for row in found["above"]}:
             raise ValueError("Choose what is above the tenancy.")
@@ -182,7 +199,7 @@ def apply(web, project, data):
                                                    "ceiling_height_mm": round(metres * 1000), "edited_by": reviewer})
         return {"applied": True, "summary": f"{where} ceiling height set to {metres:g} m."}
     if kind == "occupancy":
-        people = _number(data.get("value"), "number of people")
+        people = _in_range_nonnegative(data.get("value"), "number of people")
         _internal_gains_override(web, project, room, "occupancy_count", people, reviewer, note)
         return {"applied": True, "summary": f"{where}: {people:g} people."}
     if kind == "lighting_load":
@@ -206,6 +223,17 @@ def apply(web, project, data):
                                                   "value": value, "reviewer": reviewer})
     name = f"{value.get('code') + ' ' if value.get('code') else ''}{value.get('name', '')}"
     return {"applied": True, "summary": f"{name} in {where}: {watts:g} W each × {value.get('quantity') or 1} × {value['heat_to_space_factor']:g} to the room."}
+
+
+def _in_range_nonnegative(value, label):
+    import math
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Enter the {label} as a number.") from None
+    if isinstance(value, bool) or not math.isfinite(number) or number < 0:
+        raise ValueError(f"The {label} must be above 0, or exactly 0 to clear it.")
+    return number
 
 
 def _in_range(value, low, high, label):
@@ -249,7 +277,7 @@ def apply_glazing(root, proposal):
     for opening in proposal.get("openings", []) if isinstance(proposal, dict) else []:
         if not isinstance(opening, dict):
             continue
-        answer = rooms.get(str(opening.get("owner_room_label", "")).casefold()) or stored.get("all")
+        answer = _room_answer(rooms, opening.get("owner_room_label")) or stored.get("all")
         if not answer:
             continue
         opening["u_value_w_m2k"], opening["shgc"] = answer["u_value_w_m2k"], answer["shgc"]
@@ -311,7 +339,7 @@ def apply_constructions(root, proposal):
             continue
         answers = stored.get(surface["physical_type"]) or {}
         rooms = {str(label).casefold(): row for label, row in (answers.get("rooms") or {}).items()}
-        answer = rooms.get(str(surface.get("owner_room_label", "")).casefold()) or answers.get("all")
+        answer = _room_answer(rooms, surface.get("owner_room_label")) or answers.get("all")
         if not answer:
             continue
         surface["u_value_w_m2k"] = answer["u_value_w_m2k"]
@@ -346,7 +374,7 @@ def unconditioned_temperature(root, room_label):
         return None, None
     stored = json.loads(path.read_text(encoding="utf-8"))
     rooms = {str(label).casefold(): row for label, row in (stored.get("rooms") or {}).items()}
-    record = rooms.get(str(room_label or "").casefold()) or stored.get("all")
+    record = _room_answer(rooms, room_label) or stored.get("all")
     return (float(record["temperature_c"]), record) if record else (None, None)
 
 

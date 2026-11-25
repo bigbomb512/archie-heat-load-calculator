@@ -56,6 +56,35 @@ def room_identity(label, level):
     return f"room-use:{'unassigned-level' if level_slug in UNKNOWN_LEVELS else level_slug}:{_slug(label)}"
 
 
+# A drawing can print one name on several separate rooms on a level (a house's three ENSUITEs). Identity is
+# level + label, so each separate room gets its own occurrence label, "Ensuite (1)", "Ensuite (2)", ..., numbered in
+# plan reading order; its identity is then room-use:<level>:ensuite-1, and so on. A name printed once keeps its plain
+# label and identity. The parenthesised form is never a printed name, so base_label() can recover the drawing's label.
+_OCCURRENCE = re.compile(r"^(?P<base>.*\S)\s+\((?P<number>\d+)\)$")
+
+
+def occurrence_label(label, number):
+    return f"{_text(label)} ({int(number)})"
+
+
+def base_label(label):
+    """The drawing's label for an occurrence label ("Ensuite (2)" -> "Ensuite"); any other label is returned as is."""
+    match = _OCCURRENCE.match(_text(label))
+    return match.group("base") if match else _text(label)
+
+
+def replaced_label_keys(repeated_label, level):
+    """(label, level) keys, casefolded, of the merged record that numbered separate rooms replace on a level."""
+    label, level = _text(repeated_label).casefold(), _text(level or "Unassigned level").casefold()
+    labels = {"bedroom", "bed"} if label in {"bedroom", "bed"} else {label}
+    return {(item, level) for item in labels if item}
+
+
+def occurrence_number(label):
+    match = _OCCURRENCE.match(_text(label))
+    return int(match.group("number")) if match else None
+
+
 def _confidence(value, fallback=0.4):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return max(0.0, min(1.0, float(value)))
@@ -112,10 +141,14 @@ def _room_rows(building, vision, proposal):
     vision_entities = (((vision or {}).get("result", {}) or {}).get("auto_extraction", {}) or {}).get("entities", []) if isinstance(vision, dict) else []
     ai_rooms = [row for row in list(vision_entities) + list((proposal or {}).get("rooms", []))
                 if isinstance(row, dict) and row.get("kind") == "room" and plausible_room_label(row.get("label"))]
-    numbered_levels = {_text(row.get("level_name") or "Unassigned level").casefold() for row in ai_rooms
-                       if row.get("source") == "numbered_from_repeated_label"}
+    # Separate rooms printed with one name were numbered (Bedroom 1, 2 / Ensuite (1), (2)): the plain label on that
+    # level is the merged record they replace.
+    replaced = set()
+    for row in ai_rooms:
+        if row.get("source") == "numbered_from_repeated_label":
+            replaced |= replaced_label_keys(row.get("repeated_label") or "Bedroom", row.get("level_name"))
     def replaced_bedroom(label, level):
-        return _text(label).casefold() in {"bedroom", "bed"} and _text(level or "Unassigned level").casefold() in numbered_levels
+        return (_text(label).casefold(), _text(level or "Unassigned level").casefold()) in replaced
     ai_rooms = [row for row in ai_rooms if not replaced_bedroom(row.get("label"), row.get("level_name"))]
     grouped = {}
     for row in (building or {}).get("spaces", []) if isinstance(building, dict) else []:
@@ -308,7 +341,7 @@ def _house_label_matches(label):
         "house_wet": r"\b(bath(?:room)?|ens(?:uite)?|powder|pdr|wc|toilet)\b",
         "house_service": r"\b(laundry|l['’]?dry|ldry|w\.?i\.?r\.?|walk.?in robe|robe|linen)\b",
         "garage": r"\b(garage|carport)\b",
-        "outdoor": r"\b(balcony|alfresco|deck|terrace|patio|pool|spa|porch|verandah?|courtyard|roof)\b",
+        "outdoor": r"\b(balcony|alfresco|deck|terrace|patio|pool|spa|porch|verandah?|courtyard|roof|drive\s?way|fence|(?:back|front|side)?\s?yard|garden(?!\s*(?:room|flat|studio))|lawn|landscap\w*|paving|paved|path(?:way)?|bbq|outdoor)\b",
         "lift_shaft": r"\b(lift(?: shaft)?)\b",
         "circulation": r"\b(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
         "house_living": r"\b(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
@@ -317,7 +350,7 @@ def _house_label_matches(label):
     leading = {
         "house_wet": r"^(bath(?:room)?|ens(?:uite)?|powder|pdr|wc|toilet)\b",
         "house_service": r"^(laundry|l['’]?dry|ldry|w\.?i\.?r\.?|walk.?in robe|robe|linen)\b",
-        "garage": r"^(garage|carport)\b", "outdoor": r"^(balcony|alfresco|deck|terrace|patio|pool|spa|porch|verandah?|courtyard)\b",
+        "garage": r"^(garage|carport)\b", "outdoor": r"^(balcony|alfresco|deck|terrace|patio|pool|spa|porch|verandah?|courtyard|drive\s?way|(?:timber |boundary |side |front |rear )?fence|(?:back|front|side)?\s?yard|garden(?!\s*(?:room|flat|studio))|lawn|landscap\w*|paving|path(?:way)?|bbq|outdoor)\b",
         "lift_shaft": r"^lift\b", "house_bedroom": r"^(mbr|bed(?:room)?s?(?:\s*\d+)?|br\s*\d*)\b",
         "house_living": r"^(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
         "circulation": r"^(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
@@ -326,6 +359,14 @@ def _house_label_matches(label):
         if re.search(leading[category], text):
             return [category]
     return [category for category in priority if re.search(patterns[category], text)][:1]
+
+
+KITCHEN_LABEL = re.compile(r"^\s*(?:commercial\s+|main\s+|house\s+)?(?:kitchen|kitch|kit)\b(?:\s*\(\d+\))?\s*$", re.I)
+
+
+def is_kitchen_only(label):
+    """A room labelled only as a kitchen ("Kitchen", "KITCH", "Kitchen (2)"), not one shared with another use."""
+    return bool(KITCHEN_LABEL.match(str(label or "")))
 
 
 def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=None, dwelling=False):
@@ -394,8 +435,30 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
         scope = scope_override
         category = deepcopy(category)
         category["space_scope"] = scope
+    unsettled = origin in {"generic_fallback", "conflict"} or selected == "generic_conditioned" or (score < 0.5 and origin != "multi_factor_evidence")
+    if dwelling and not override and not ac_evidence and scope_override not in SCOPES and unsettled \
+            and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}:
+        # In a house, a room whose use the evidence can't settle is not cooled until someone says it is (user decision
+        # 2026-11-19: small jobs count it as not cooled; larger buildings keep it cooled and wait for confirmation).
+        scope = "not_cooled"
+        rationale = ("House room whose use the drawings don't settle (" + rationale.rstrip(".") + "): counted as not cooled. "
+                     "Mark it cooled on the Fix screen if it is air-conditioned.")
+        category = deepcopy(category)
+        category["space_scope"] = scope
+    if not dwelling and is_kitchen_only(label) and not override and not ac_evidence and scope_override not in SCOPES \
+            and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}:
+        # A restaurant's or shop's kitchen isn't air-conditioned: its large exhaust hood draws the cooled air straight
+        # out, so cooling it wastes money (user decisions 2026-11-22 and 2026-11-23). A house's kitchen is cooled as
+        # before: its range hood is small and runs only while cooking. A kitchen the drawings show air-conditioned, a
+        # reviewer's choice and a confirmed answer still win; a combined label ("Kitchen/Dining") stays cooled.
+        scope = "not_cooled"
+        rationale = ("Kitchen: not air-conditioned, as its exhaust hood draws the cooled air straight out. "
+                     "Mark it cooled on the Fix screen if this one is air-conditioned.")
+        category = deepcopy(category)
+        category["space_scope"] = scope
+        unsettled = False
     special = scope in EXCLUDED_SCOPES
-    status = "excluded" if special else "needs_review" if origin in {"generic_fallback", "conflict"} or selected == "generic_conditioned" or (score < 0.5 and origin != "multi_factor_evidence") else "resolved"
+    status = "excluded" if special else "needs_review" if unsettled else "resolved"
     evidence = []
     for item in [room["building"], *(room["ai"] or [])]:
         for reference in _evidence(item):
@@ -443,7 +506,14 @@ def resolve(building, vision=None, proposal=None, source_fingerprints=None, exis
     if dwelling_context.get("is_dwelling") is True:
         for room_context in evidence_by_room.values():
             room_context["dwelling_evidence"] = deepcopy(dwelling_context.get("evidence", []))
-    records = [_record(room, taxonomy, source_fingerprints or {}, previous.get(room_identity(room["label"], room["level_name"])),
+    def prior(room):
+        # A room split out of one merged same-name record ("Ensuite" -> "Ensuite (1)", "(2)", ...) inherits that
+        # record's reviewer decision (its use override) until it has its own: the decision was made for the name.
+        identity = room_identity(room["label"], room["level_name"])
+        if identity in previous or occurrence_number(room["label"]) is None:
+            return previous.get(identity)
+        return previous.get(room_identity(base_label(room["label"]), room["level_name"]))
+    records = [_record(room, taxonomy, source_fingerprints or {}, prior(room),
                        evidence_by_room.get(room_identity(room["label"], room["level_name"])), dwelling_context.get("is_dwelling") is True)
                for room in _room_rows(building, vision or {}, proposal or {})]
     result = {"schema_version": 1, "taxonomy_pack_id": PACK_ID, "taxonomy_fingerprint": _taxonomy_fingerprint(taxonomy, dwelling_context.get("is_dwelling") is True),

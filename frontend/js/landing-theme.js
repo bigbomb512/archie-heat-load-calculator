@@ -3,7 +3,7 @@
   'use strict';
   var preference = window.matchMedia('(prefers-color-scheme: dark)');
   var saved;
-  try { saved = localStorage.getItem('toki.landing.theme'); } catch (_) {}
+  try { saved = localStorage.getItem('archie.landing.theme') || localStorage.getItem('toki.landing.theme'); } catch (_) {}
   var explicit = saved === 'light' || saved === 'dark';
   function apply(theme) {
     document.documentElement.dataset.theme = theme;
@@ -21,7 +21,7 @@
     document.getElementById('themeToggle').addEventListener('click', function () {
       var theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       explicit = true;
-      try { localStorage.setItem('toki.landing.theme', theme); } catch (_) {}
+      try { localStorage.setItem('archie.landing.theme', theme); } catch (_) {}
       apply(theme);
     });
   });

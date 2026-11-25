@@ -1429,7 +1429,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         profile = (deepcopy(pack["profiles"].get(profile_id)) if profile_id in pack["profiles"] else _profiles_for_dwelling(profile_id, room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True))
         profile.update({key: value for key, value in resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).items() if key in profile and value is not None})
         room.update({"room_id": f"room-{row['key']}", "name": row["name"], "zone_id": f"zone-{row['key']}", "source_zone_id": f"zone-{row['key']}",
-                     "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]], "ceiling_height_mm": resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).get("ceiling_height_mm")})
+                     "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]],
+                     # The room list's identity (level + label): the model's name alone repeats on another level.
+                     "source_room_id": room_use_resolver.room_identity(row["name"], row["level"]),
+                     "ceiling_height_mm": resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).get("ceiling_height_mm")})
         resolved_internal = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
         internal_schedule_id = resolved_internal.get("schedule_id") or f"prelim-{profile_id}"
         room["schedule_assignments"] = {"people": internal_schedule_id, "lighting": internal_schedule_id, "outside_air": internal_schedule_id, "infiltration": "", "equipment": {source["source_id"]: internal_schedule_id for source in room["heat_sources"]}, "solar": {}}
@@ -1747,7 +1750,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                           if facing_unknown else
                           _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade, wall_height, wall_obstruction))
             solar_peak = max((value for hours in hourly_sun.values() for value in hours), default=0.0)
-        if solar_peak:
+        # A glazing-only host contributes no opaque area to the model. Its
+        # windows receive their own solar schedules below, so do not create an
+        # orphan wall schedule for the host.
+        if solar_peak and not glazing_only:
             operating = _sun_schedule(profile_id)
             values = (operating if hourly_sun else [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)])
             schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation or 'averaged'} façade solar profile", values, _source(f"solar-{orientation or 'averaged'}")))
@@ -1790,10 +1796,18 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                            "provenance_status": "provisional"})
         if candidate.get("resolved_u_value_w_m2k") is not None:
             opaque["u_value_w_m2k"] = candidate["resolved_u_value_w_m2k"]
+            # The sun on the surface reaches the room as U × (absorptance / outside film) of it: with the surface's own
+            # U-value, not the pack's it was first given (an answered U 1.9 wall was taking the sun of a U 0.6 one;
+            # Vaucluse, 2026-11-23).
+            if opaque["solar_gain_factor"]:
+                opaque["solar_gain_factor"] = round(opaque["u_value_w_m2k"] * envelope["opaque_solar_absorptance_over_ho_m2k_w"], 6)
         if candidate.get("resolved_construction_id"):
             opaque["construction_id"] = candidate["resolved_construction_id"]
         if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
             opaque["source"] = candidate["construction_source"]
+            # Kept under its own name too: the stored-heat model reads it to pick the construction's thermal mass, so a
+            # typed "double brick, U 1.6" is modelled as brick, not as the default lightweight wall (2026-11-23).
+            opaque["construction_source"] = candidate["construction_source"]
         for note in candidate.get("phase1_assumptions") or []:      # several notes on one surface (e.g. area, roof)
             if isinstance(note, dict) and note.get("reason"):
                 phase1_assumptions.append({"room_id": room["room_id"], "component": note.get("component") or physical,
@@ -2210,6 +2224,7 @@ def _phase1_surface_audit(report, material):
                 window = surface.get("window", {}) if isinstance(surface.get("window"), dict) else {}
                 by_surface[str(surface["surface_id"])] = {
                     "room_id": room_id, "room_name": room.get("name", ""),
+                    **({"source_room_id": room["source_room_id"]} if room.get("source_room_id") else {}),
                     "surface_id": str(surface["surface_id"]), "surface_type": surface.get("kind", kind),
                     "area_m2": surface.get("area_m2", surface.get("explicit_opening_area_m2")),
                     "opening_area_m2": surface.get("explicit_opening_area_m2"),

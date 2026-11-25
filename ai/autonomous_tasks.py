@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from ai import reviewer_room_geometry, site_location_resolution, room_outline, kitchen_equipment
@@ -226,12 +227,22 @@ def validate_p0_tenancy_outline(packet, reply):
     return room_outline.validate_tenancy_outline_reply(parse_json_reply(reply), packet["transform"])
 
 
+CORNER_MIN_SKETCH_SHARE = 0.6
+
+
 def validate_p0_outline_corners(packet, reply):
     # Not judged against the AI's sketch: on Casa Nova (2026-10-24) the tenancy sketch was 58 m² of a ~260 m² tenancy
     # and good corner answers were refused for differing from it. A room may not exceed the corner-built tenancy.
-    return room_outline.validate_corner_outline_reply(parse_json_reply(reply), packet["corners"], None,
-                                                      packet.get("room") or "the tenancy",
-                                                      max_area=packet.get("tenancy_area_px") if packet.get("room") else None)
+    # A room's corners may enclose more than its sketch (the sketch may be a fragment of the room) but not much less:
+    # on the Turramurra house (2026-11-20) three corners made the kitchen a 4.4 m² triangle of its 13.8 m² sketch.
+    room = packet.get("room")
+    return room_outline.validate_corner_outline_reply(parse_json_reply(reply), packet["corners"], packet.get("sketch"),
+                                                      room or "the tenancy",
+                                                      sketch_area=packet.get("sketch_area_px") if room else None,
+                                                      max_area=packet.get("tenancy_area_px") if room else None,
+                                                      min_area=(CORNER_MIN_SKETCH_SHARE * packet["sketch_area_px"]
+                                                                if room and packet.get("sketch_area_px") else None),
+                                                      check_area_tolerance=False)
 
 
 def validate_p0_unnamed_space(packet, reply):
@@ -769,7 +780,7 @@ def parse_json_reply(reply):
     return value
 
 
-def build_site_packet(ai_input, spatial_ocr, building_evidence):
+def build_site_packet(ai_input, spatial_ocr, building_evidence, page_inventory=None):
     context = site_location_resolution.infer_pdf_context(ai_input, spatial_ocr, building_evidence)
     excerpts = []
     for group in ("address_candidates", "site_name_candidates", "excluded_address_candidates"):
@@ -779,6 +790,17 @@ def build_site_packet(ai_input, spatial_ocr, building_evidence):
             if excerpt:
                 excerpts.append({"page": source.get("page"), "drawing_number": source.get("drawing_number", ""),
                                  "text": excerpt, "clue_type": group})
+    inventory_pages = (page_inventory or {}).get("pages", {})
+    inventory_rows = ((int(key) + 1 if str(key).isdigit() else None, row)
+                      for key, row in inventory_pages.items()) if isinstance(inventory_pages, dict) else ((None, row) for row in inventory_pages)
+    for inventory_page, page_row in inventory_rows:
+        if not isinstance(page_row, dict):
+            continue
+        page_number = page_row.get("page", inventory_page)
+        for fact in page_row.get("information", []):
+            if fact.get("kind") == "location_orientation" and fact.get("what"):
+                excerpts.append({"page": page_number, "drawing_number": page_row.get("drawing_number", ""),
+                                 "text": str(fact["what"]), "clue_type": "site_location_fact"})
     unique = {(row["page"], row["text"]): row for row in excerpts}
     excerpts = sorted(unique.values(), key=lambda row: (row["page"] or 0, row["clue_type"], row["text"]))
     candidates = []
@@ -811,7 +833,26 @@ def validate_site_reply(packet, reply):
         if not isinstance(site, dict) or site.get("kind") not in {"street_address", "tenancy_in_centre"}:
             raise ValueError("site must be null or an object with a supported kind.")
         text, page = str(site.get("text", "")).strip(), site.get("page")
-        if not text or type(page) is not int or not any(row.get("page") == page and text in row.get("text", "") for row in excerpts):
+        submitted_text = text
+        page_excerpts = [str(row.get("text", "")) for row in excerpts if row.get("page") == page]
+        site_facts = [str(row.get("text", "")) for row in excerpts if row.get("clue_type") == "site_location_fact"
+                      and row.get("text", "").casefold().startswith("site is")]
+        parcel_pattern = r"\bLot\s+\d+\s+(?:DP|SP)\s*\d+\b"
+        parcel = next((match.group(0) for excerpt in page_excerpts
+                       for match in re.finditer(parcel_pattern, excerpt, re.I)), "")
+        if not parcel:
+            address_core = re.sub(r"\s+Lot\s*$", "", text, flags=re.I).rstrip(" ,")
+            parcel = next((match.group(0) for excerpt in site_facts if address_core.casefold() in excerpt.casefold()
+                           for match in re.finditer(parcel_pattern, excerpt, re.I)), "")
+        if parcel and not re.search(r"\bLot\s+\d+\s+(?:DP|SP)\s*\d+\b", text, re.I):
+            text = re.sub(r"\s+Lot\s*$", "", text, flags=re.I).rstrip(" ,") + " " + parcel
+        else:
+            text = re.sub(r"\s+Lot\s*$", "", text, flags=re.I).rstrip(" ,")
+        site = {**site, "text": text}
+        page_evidence = " ".join(page_excerpts)
+        cited_text = any(row.get("page") == page and submitted_text in row.get("text", "") for row in excerpts)
+        parcel_is_cited = not parcel or parcel in page_evidence or any(parcel in excerpt for excerpt in site_facts)
+        if not text or type(page) is not int or not cited_text or not parcel_is_cited:
             raise ValueError("Site text must be an exact substring of a supplied excerpt on the cited page.")
     consultants = value.get("consultant_addresses", [])
     if not isinstance(consultants, list):
@@ -911,7 +952,23 @@ def north_crop_boxes(width, height, word_points=()):
 
 def north_word_points(pdf_path, page):
     """Page fractions (x, y) of a printed "NORTH" that labels an arrow, title-block band first; none for a scan or an
-    unreadable PDF. "NORTH ELEVATION", "north boundary" and the like aren't arrow labels."""
+    unreadable PDF. "NORTH ELEVATION", "north boundary" and the like aren't arrow labels.
+
+    Read once per page of each version of the PDF: the north questions are rebuilt every round of drawing questions,
+    and reading a page's words took about 9 s on a 30-sheet house set (Turramurra 2026-11-18)."""
+    try:
+        stat = Path(str(pdf_path)).stat()
+    except (OSError, TypeError, ValueError):
+        return []
+    return list(_cached_north_word_points(str(pdf_path), stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0), int(page)))
+
+
+@lru_cache(maxsize=64)
+def _cached_north_word_points(pdf_path, _mtime_ns, _size, _inode, page):
+    return tuple(_read_north_word_points(pdf_path, page))
+
+
+def _read_north_word_points(pdf_path, page):
     try:
         import pdfplumber
         with pdfplumber.open(str(pdf_path)) as pdf:

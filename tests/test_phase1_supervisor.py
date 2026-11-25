@@ -141,6 +141,17 @@ class RoutingAndCacheTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.project = {"id": "test", "review_dir": str(self.root), "reasoning_packet": "ready"}
 
+    def test_third_attempt_includes_prior_answer_and_failure_reason(self):
+        gap = {"gap_ids": ["room_area:shop"], "room_id": "shop", "pages": [20]}
+        history = [{"gap_id": "room_area:shop", "task": "P0_room_outlines", "target": "page-20",
+                    "run_id": "first", "status": "applied"}, {"gap_id": "room_area:shop", "outcome": "unavailable",
+                    "reason": "No plan page matched the room."}]
+        with patch.object(tasks, "_current_task", return_value={"run_id": "first", "applied_value": {"rooms": [{"room": "Shop"}]}}):
+            note = supervisor.third_attempt_note(gap, history, snapshot(room(), room("Kitchen", area_m2=25)), self.root)
+        self.assertIn('"room": "Shop"', note)
+        self.assertIn("No plan page matched the room", note)
+        self.assertIn("Kitchen 25 m²", note)
+
     def test_targeted_note_changes_fingerprint_but_same_note_reuses_the_run(self):
         packet = {"task": "P7_ceiling_heights", "page": 22, "rooms": ["Shop"], "labels": []}
         base = tasks._create_run(self.root, "P7_ceiling_heights", "page-22", deepcopy(packet), "Read labels")
@@ -152,6 +163,26 @@ class RoutingAndCacheTests(unittest.TestCase):
         self.assertEqual(first["run_id"], second["run_id"])
         self.assertIn(gap["note"], first["prompt"])
         self.assertIn("22", first["prompt"])
+
+    def test_applied_outline_is_not_replaced_by_its_own_baseline_question(self):
+        baseline = {"task": "P0_room_outlines", "page": 6, "room_names": ["Dining", "Kitchen"]}
+        targeted = {**baseline, "room_names": ["Kitchen"]}
+        gap = {"task": "P0_room_outlines", "target": "page-6", "room_names": ["Kitchen"],
+               "note": "Check Kitchen", "pages": [6]}
+        with patch.object(tasks, "_p0_outline_packets", side_effect=lambda root, requested_rooms=None, skipped=None:
+                [("P0_room_outlines", "page-6", targeted if requested_rooms else baseline, "Trace", [], "")]):
+            record = tasks.prepare_investigation(self.project, gap)[0]
+            record.update(status="below_accuracy_bar", applied_value={"rooms": ["Kitchen"]})
+            tasks._update_record(self.root, record)
+            after_own_answer = {**baseline, "room_names": ["Dining"]}
+            rebuilt = tasks._create_run(self.root, "P0_room_outlines", "page-6", after_own_answer, "Trace")
+            self.assertEqual(rebuilt["run_id"], record["run_id"])
+            self.assertEqual(tasks._current_task(self.root, "P0_room_outlines", "page-6")["status"], "below_accuracy_bar")
+            self.assertEqual(tasks._create_run(self.root, "P0_room_outlines", "page-6", after_own_answer, "Trace")["run_id"], record["run_id"])
+            changed = tasks._create_run(self.root, "P0_room_outlines", "page-6",
+                                        {**baseline, "calibration": {"mm_per_px": 2}}, "Trace")
+            self.assertNotEqual(changed["run_id"], record["run_id"])
+            self.assertEqual(changed["status"], "waiting_for_reply")
 
     def test_refresh_preserves_a_targeted_rejection_and_its_correction_reason(self):
         baseline = {"room": "Shop"}
@@ -221,23 +252,78 @@ class RoutingAndCacheTests(unittest.TestCase):
         archive = next((tasks._record_file(self.root, saved).parent / "reply_attempts").glob("*.json"))
         self.assertEqual(read_json(archive)["raw_reply"], "[]")
 
-    def test_a_partial_room_use_reply_cannot_replace_the_full_room_list(self):
+    def test_targeted_room_use_reply_merges_only_requested_rooms(self):
         from backend import skill_workflow_service as skills
         folder = self.root / "skill_workflow_runs" / "review" / "proposals"
         folder.mkdir(parents=True)
-        previous = {"proposal_fields": {"rooms": [{"room_id": "shop"}, {"room_id": "kitchen"}]}, "citations": [{"id": "c1", "page": 1}]}
+        previous = {"proposal_fields": {"rooms": [{"room_id": "shop", "scope": "comfort_hvac"},
+            {"room_id": "kitchen", "scope": "comfort_hvac"}]}, "citations": [{"id": "c1", "page": 1}]}
         write_json(folder / "room_identity_use.json", previous)
         write_json(self.root / "skill_workflow_run.json", {"run_id": "review", "source_fingerprint": "a" * 64,
             "subskills": {"room_identity_use": {"status": "done"}}})
-        partial = {"status": "provisional", "input_fingerprint": "b" * 64, "proposal_fields": {"rooms": [{"room_id": "shop"}]}}
+        partial = {"status": "provisional", "input_fingerprint": "b" * 64,
+            "proposal_fields": {"rooms": [{"room_id": "shop", "scope": "unresolved"}]}}
         with patch.object(skills, "_execute_subskill", return_value=partial), \
                 patch.object(skills, "_validate_subskill_output", side_effect=lambda spec, reply, *args, **kwargs: reply), \
                 patch.object(skills, "_consented_page_ids", return_value={1}), \
-                patch.object(skills, "_persist_skill_attempt") as archive:
-            with self.assertRaisesRegex(ValueError, "omitted previously evidenced rooms"):
-                supervisor._room_use_investigation(None, self.project, {"note": "Check Shop"})
+                patch.object(skills, "_persist_skill_attempt") as archive, \
+                patch.object(skills, "_auto_review_confident_findings"), \
+                patch("backend.job_progress.stage_blocker", return_value=None):
+            self.assertEqual(supervisor._room_use_investigation(None, self.project,
+                {"note": "Check Shop", "gap_ids": ["room_use:shop"]}), {"status": "applied"})
+        merged = read_json(folder / "room_identity_use.json")
+        self.assertEqual(merged["proposal_fields"]["rooms"],
+            [{"room_id": "shop", "scope": "unresolved"}, {"room_id": "kitchen", "scope": "comfort_hvac"}])
+        self.assertEqual(merged["citations"], previous["citations"])
+        self.assertEqual(archive.call_args.kwargs["outcome"], "accepted")
+
+    def test_targeted_room_use_reply_must_answer_every_requested_room(self):
+        from backend import skill_workflow_service as skills
+        folder = self.root / "skill_workflow_runs" / "review" / "proposals"
+        folder.mkdir(parents=True)
+        previous = {"proposal_fields": {"rooms": [{"room_id": "shop", "original_label": "Shop"},
+            {"room_id": "kitchen", "original_label": "Kitchen"}]}}
+        write_json(folder / "room_identity_use.json", previous)
+        write_json(self.root / "skill_workflow_run.json", {"run_id": "review", "source_fingerprint": "a" * 64,
+            "subskills": {"room_identity_use": {"status": "done"}}})
+        reply = {"status": "provisional", "input_fingerprint": "b" * 64, "proposal_fields": {"rooms": [{"room_id": "shop"}]}}
+        with patch.object(skills, "_execute_subskill", return_value=reply), \
+                patch.object(skills, "_validate_subskill_output", side_effect=lambda spec, value, *a, **k: value), \
+                patch.object(skills, "_consented_page_ids", return_value={1}), \
+                patch.object(skills, "_persist_skill_attempt"):
+            with self.assertRaisesRegex(ValueError, "omitted a requested room"):
+                supervisor._room_use_investigation(None, self.project,
+                    {"note": "Check Shop and Kitchen", "gap_ids": ["room_use:shop", "room_use:kitchen"]})
         self.assertEqual(read_json(folder / "room_identity_use.json"), previous)
-        self.assertEqual(archive.call_args.kwargs["outcome"], "rejected")
+
+    def test_targeted_room_use_reply_ignores_what_it_says_about_other_rooms(self):
+        """A reply that repeats the whole list with small differences (Job A's Store answers, 2026-11-19) keeps its
+        answer for the asked-about room; other rooms, added rooms and other affected ids are left as they were."""
+        from backend import skill_workflow_service as skills
+        folder = self.root / "skill_workflow_runs" / "review" / "proposals"
+        folder.mkdir(parents=True)
+        previous = {"proposal_fields": {"rooms": [{"room_id": "shop", "original_label": "Shop", "scope": "comfort_hvac"},
+            {"room_id": "kitchen", "original_label": "Kitchen", "scope": "comfort_hvac"}]}}
+        write_json(folder / "room_identity_use.json", previous)
+        write_json(self.root / "skill_workflow_run.json", {"run_id": "review", "source_fingerprint": "a" * 64,
+            "subskills": {"room_identity_use": {"status": "done"}}})
+        reply = {"status": "provisional", "input_fingerprint": "b" * 64, "affected_ids": ["shop", "kitchen"],
+            "proposal_fields": {"rooms": [{"room_id": "shop", "original_label": "Shop", "scope": "not_cooled"},
+                {"room_id": "kitchen", "original_label": "Cookhouse", "scope": "not_cooled"},
+                {"room_id": "other", "original_label": "Other"}]}}
+        with patch.object(skills, "_execute_subskill", return_value=reply), \
+                patch.object(skills, "_validate_subskill_output", side_effect=lambda spec, value, *a, **k: value), \
+                patch.object(skills, "_consented_page_ids", return_value={1}), \
+                patch.object(skills, "_persist_skill_attempt"), \
+                patch.object(skills, "_auto_review_confident_findings"), \
+                patch("backend.job_progress.stage_blocker", return_value=None):
+            self.assertEqual(supervisor._room_use_investigation(None, self.project,
+                {"note": "Check Shop", "gap_ids": ["room_use:shop"]}), {"status": "applied"})
+        merged = read_json(folder / "room_identity_use.json")
+        self.assertEqual(merged["proposal_fields"]["rooms"],
+            [{"room_id": "shop", "original_label": "Shop", "scope": "not_cooled"},
+             {"room_id": "kitchen", "original_label": "Kitchen", "scope": "comfort_hvac"}])
+        self.assertEqual(merged["affected_ids"], ["shop"])
 
     def test_one_packet_is_selected_per_attempt_then_an_alternative_view(self):
         packet = {"task": "P7_ceiling_heights", "rooms": ["Shop"], "labels": []}
@@ -291,11 +377,30 @@ class RunTests(unittest.TestCase):
         answer.assert_called_once()
         self.assertEqual(result["outcome"], "draft_ready")
 
+    def test_new_drawing_question_is_sent_before_cycle_model_rebuild(self):
+        order = []
+        values = iter([snapshot(room(area_m2=None)), snapshot()])
+        def rebuild(*args):
+            order.append("model")
+            return next(values)
+        def waiting(*args):
+            return [{"task": "P8_glazing_certificate", "target": "page-3"}] if "sent" not in order else []
+        with patch.object(supervisor, "_rebuild", side_effect=rebuild), \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={}), \
+                patch.object(drawings, "apply_investigation", return_value={"status": "applied"}), \
+                patch.object(drawings, "_waiting", side_effect=waiting), \
+                patch.object(drawings, "answer_all", side_effect=lambda *args: order.append("sent")) as send:
+            supervisor.run(None, self.project)
+        self.assertEqual(order, ["model", "sent", "model"])
+        send.assert_called_once()
+
     def test_a_usage_limit_on_the_last_pass_keeps_the_result(self):
         with patch.object(drawings, "_waiting", return_value=[{"task": "P4_openings", "target": "20"}]), \
                 patch.object(drawings, "answer_all", side_effect=supervisor.ai_provider.UsageLimitReached("limit")):
             result, _calls = self.execute([snapshot()])
         self.assertEqual(result["outcome"], "draft_ready")
+        self.assertTrue(read_json(self.root / supervisor.JOB_FILE)["provider_limited"])
 
     def test_no_last_pass_when_ai_is_unavailable(self):
         with patch.object(supervisor, "ai_unavailable", return_value="No key"), \
@@ -311,6 +416,30 @@ class RunTests(unittest.TestCase):
         tasks._refresh_geometry_tasks.assert_called_once()
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["gaps_fixed"], 1)
 
+    def test_successful_answers_across_waves_rebuild_once_per_cycle(self):
+        first = snapshot(room(area_m2=None), model_inputs=[{"area_m2": 40}])
+        second = snapshot(room("Shop", model={"cooling_load": {"envelope_surfaces": [{"kind": "opaque_wall", "area_m2": 20}]}}),
+                          model_inputs=[{"area_m2": 40, "envelope": [{"kind": "opaque_wall", "area_m2": 20}]}])
+        with patch.object(supervisor, "_rebuild", side_effect=[first, second]) as rebuild, \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={}), \
+                patch.object(drawings, "apply_investigation", return_value={"status": "applied"}) as apply:
+            supervisor.run(None, self.project)
+        self.assertGreaterEqual(apply.call_count, 1)
+        self.assertEqual(rebuild.call_count, 2)  # initial snapshot plus one cycle rebuild
+        timing = read_json(self.root / supervisor.JOB_FILE)["cycle_timings"][0]
+        self.assertEqual(timing["rebuild_seconds"], 0)
+        self.assertIn("ai_seconds", timing)
+
+    def test_failed_question_is_not_reasked_for_same_model_inputs(self):
+        value = snapshot(room(area_m2=None))
+        with patch.object(supervisor, "_rebuild", return_value=value), \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={}) as ask, \
+                patch.object(drawings, "apply_investigation", return_value={"status": "rejected"}):
+            supervisor.run(None, self.project)
+        self.assertEqual(ask.call_count, 1)
+
     def test_no_progress_stops_after_one_cycle_and_retains_exception(self):
         value = snapshot(room(area_m2=None))
         result, calls = self.execute([value, value])
@@ -319,22 +448,34 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result["exceptions"][0]["attempts"], 1)
         self.assertTrue(result["exceptions"][0]["tried"])
 
-    def test_rejected_answer_gets_its_bounded_correction_before_no_progress_stop(self):
+    def test_rejected_answer_is_not_reasked_for_unchanged_inputs(self):
         value = snapshot(room(area_m2=None))
         with patch.object(supervisor, "_rebuild", return_value=value), \
                 patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
                 patch.object(drawings, "request_investigation", return_value={"reply": {}}) as ask, \
                 patch.object(drawings, "apply_investigation", return_value={"status": "waiting_for_reply", "reason": "Invalid JSON"}):
             result = supervisor.run(None, self.project)
-        self.assertEqual(ask.call_count, 2)
-        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+        self.assertEqual(ask.call_count, 1)
+        self.assertEqual(result["exceptions"][0]["attempts"], 1)
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "no_progress")
 
-    def test_each_gap_gets_at_most_two_attempts_even_if_other_inputs_improve(self):
-        values = [snapshot(room(area_m2=None), model_inputs=[number]) for number in range(3)]
-        result, calls = self.execute(values)
-        self.assertEqual(calls, 2)
-        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+    def test_each_gap_gets_a_third_attempt_with_prior_results_and_neighbour_evidence(self):
+        values = [snapshot(room(area_m2=None), room("Kitchen", area_m2=25), model_inputs=[number])
+                  for number in range(4)]
+        notes = []
+        def prepare(project, gap):
+            notes.append(gap["note"])
+            return self.fake_prepare(project, gap)
+        with patch.object(tasks, "prepare_investigation", side_effect=prepare), \
+                patch.object(supervisor, "_rebuild", side_effect=values), \
+                patch.object(drawings, "request_investigation", return_value={"reply": {}}) as ask, \
+                patch.object(drawings, "apply_investigation", return_value={"status": "applied"}):
+            result = supervisor.run(None, self.project)
+        self.assertEqual(ask.call_count, 3)
+        self.assertEqual(result["exceptions"][0]["attempts"], 3)
+        self.assertNotIn("Earlier checks:", notes[0])
+        self.assertIn("Earlier checks: applied: the gap remained open", notes[2])
+        self.assertIn("Kitchen 25 m²", notes[2])
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "attempt_limit")
 
     def test_replacement_run_restores_attempts_from_durable_state(self):
@@ -342,9 +483,9 @@ class RunTests(unittest.TestCase):
         self.execute([value, value])
         # BackgroundJob creates a replacement file with the original start fields.
         write_json(self.root / supervisor.JOB_FILE, {"status": "running"})
-        result, calls = self.execute([value, value])
-        self.assertEqual(calls, 1)
-        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+        result, calls = self.execute([value, value, value])
+        self.assertEqual(calls, 2)
+        self.assertEqual(result["exceptions"][0]["attempts"], 3)
 
     def test_three_cycles_backstop_when_new_material_gaps_keep_appearing(self):
         values = [snapshot(room(str(number), area_m2=None)) for number in range(4)]
@@ -358,6 +499,11 @@ class RunTests(unittest.TestCase):
             _, calls = self.execute([values, values])
         self.assertEqual(calls, 12)
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["cycle"], 1)
+
+    def test_missing_area_question_precedes_other_independent_investigations(self):
+        value = snapshot(room(area_m2=None, height={"origin": "preliminary_fallback"}), height_pages=[21])
+        gaps = supervisor.audit(value)
+        self.assertEqual(supervisor.select_investigations(gaps, {})[0]["kind"], "room_area")
 
     def test_concurrency_setting_controls_simultaneous_provider_calls(self):
         values = snapshot(*[room(f"Space {number}", traces=[{"roof": "unknown", "edges": []}]) for number in range(9)])
@@ -410,6 +556,56 @@ class RunTests(unittest.TestCase):
         self.assertIn("weren't re-checked", result["exceptions"][0]["message"])
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "ai_unavailable")
 
+
+
+class StatusHonestyTests(unittest.TestCase):
+    """Turramurra (2026-11-18): the check stopped at its cycle limit with 42 gaps left and showed a plain done tick; the
+    Store's area changed 7.8 -> 5.8 m² without a word; its fixes made the earlier room-name review look out of date."""
+    setUp = RunTests.setUp
+    fake_prepare = RunTests.fake_prepare
+    execute = RunTests.execute
+
+    def test_an_area_the_check_changed_is_recorded_with_before_and_after(self):
+        before = snapshot(room(name="Store", area_m2=7.8, area_source="room_size_estimated"), room(name="Shop"))
+        after = snapshot(room(name="Store", area_m2=5.84), room(name="Shop"))
+        self.execute([before, after])
+        state = read_json(self.root / supervisor.JOB_FILE)
+        self.assertEqual(state["area_changes"], [{"room": "Store", "before_m2": 7.8, "after_m2": 5.8}])
+        self.assertEqual(read_json(self.root / "phase1_supervisor_state.json")["area_baseline"]["store"]["area_m2"], 7.8)
+
+    def test_rounding_and_unchanged_areas_are_not_reported(self):
+        self.assertEqual(supervisor.area_changes({"a": {"name": "A", "area_m2": 10.0}}, {"a": {"name": "A", "area_m2": 10.04}}), [])
+        self.assertEqual(supervisor.area_changes({"a": {"name": "A", "area_m2": None}}, {"a": {"name": "A", "area_m2": 4.0}}),
+                         [{"room": "A", "before_m2": None, "after_m2": 4.0}])
+
+    def test_its_fixes_are_taken_in_by_the_drawing_review(self):
+        with patch.object(supervisor, "_take_in_review") as take_in:
+            self.execute([snapshot(room(area_m2=None)), snapshot()])
+        take_in.assert_called_once_with(self.project)
+
+    def test_take_in_review_records_the_current_review_run(self):
+        write_json(self.root / "skill_workflow_run.json", {"run_id": "r9"})
+        with patch("backend.skill_workflow_service.take_in_downstream") as take_in:
+            supervisor._take_in_review(self.project)
+        take_in.assert_called_once_with(self.project, "r9")
+
+    def status_for(self, **state):
+        base = {"status": "done", "source_fingerprint": "fp", "area_baseline": {"x": {}}, "max_cycles": 3,
+                "exceptions": [{"message": "Check what is above Store.", "room": "Store", "pages": [25], "attempts": 2,
+                                "kind": "roof", "id": "roof:store", "tried": [{"private": True}]}]}
+        with patch.object(supervisor._JOB, "status", return_value={**base, **state}), \
+                patch.object(supervisor, "source_fingerprint", return_value="fp"):
+            return supervisor.status(None, self.project)
+
+    def test_stopping_at_a_limit_with_gaps_left_is_flagged(self):
+        result = self.status_for(stop_reason="cycle_limit", outcome="partial_draft")
+        self.assertTrue(result["stopped_at_limit"])
+        self.assertEqual(result["gaps_remaining"], 1)
+        self.assertEqual(result["exceptions"][0]["kind"], "roof")
+        self.assertNotIn("tried", result["exceptions"][0])
+        self.assertNotIn("area_baseline", result)
+        self.assertFalse(self.status_for(stop_reason="ready", exceptions=[])["stopped_at_limit"])
+        self.assertFalse(self.status_for(status="running", stop_reason="cycle_limit")["stopped_at_limit"])
 
 
 class ConsentTests(unittest.TestCase):
@@ -549,6 +745,87 @@ class SurroundingsAuditTests(unittest.TestCase):
         self.assertFalse(supervisor._exposed(mall))
         street = {**mall, "traces": [{"edges": [{"index": 3, "boundary": "external"}], "roof": "not_exposed", "openings": [{"edge_index": 3}]}]}
         self.assertTrue(supervisor._exposed(street))
+
+
+class UnavailablePacketTests(unittest.TestCase):
+    """Job A (2026-11-19): 7 of 10 checks ended "unavailable" with a generic reason and nothing was fixed."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.project = {"id": "a", "review_dir": str(self.root), "reasoning_packet": "ready"}
+
+    def test_a_house_whose_walls_are_set_by_rule_has_no_unknown_wall_check(self):
+        value = room("Bedroom", traces=[{"page": 7, "roof": "exposed", "roof_source": "ai_determined",
+                                         "edges": [{"index": 0, "boundary": "unknown"}]}])
+        self.assertEqual([gap["kind"] for gap in supervisor.audit(snapshot(value))], ["unknown_walls"])
+        self.assertEqual(supervisor.audit(snapshot(value, dwelling=True, house_walls_by_rule=True)), [])
+        # A house that shares a wall is asked, as before.
+        self.assertEqual([gap["kind"] for gap in supervisor.audit(snapshot(value, dwelling=True, house_walls_by_rule=False))],
+                         ["unknown_walls"])
+
+    def test_a_left_out_room_with_no_outline_asks_for_its_outline_with_its_area_check(self):
+        kitchen = room("KITCHEN", area_m2=None, area_source="", traces=[], pages=[7, 16])
+        report = {"phase1_coverage": {"rooms_left_out": [{"label": "KITCHEN"}]}}
+        gaps = supervisor.audit(snapshot(kitchen, report=report))
+        self.assertEqual({(gap["kind"], gap["task"]) for gap in gaps},
+                         {("room_area", "P0_room_outlines"), ("omitted_room", "P0_room_outlines")})
+        grouped = supervisor.group_investigations(gaps)
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(sorted(grouped[0]["gap_ids"]), sorted(gap["id"] for gap in gaps))
+
+    def test_the_outside_walls_check_says_why_a_house_has_no_question(self):
+        gap = {"task": "P3_boundaries", "room": "Bedroom", "room_names": ["Bedroom"], "plan_page": 7, "pages": [7], "note": "n"}
+        with patch.object(tasks, "_house_without_shared_walls", return_value=True):
+            with self.assertRaises(ValueError) as caught:
+                tasks.prepare_investigation(self.project, gap)
+        self.assertIn("outside-walls question", str(caught.exception))
+        self.assertIn("set by rule", str(caught.exception))
+        self.assertNotIn("prerequisite remains unresolved", str(caught.exception))
+
+    def test_the_outline_check_names_the_missing_prerequisite_per_plan_page(self):
+        write_json(self.root / "room_use_resolution.json", {"records": [
+            {"room_id": "k", "original_label": "KITCHEN", "evidence": [{"page": 7, "excerpt": "KITCHEN"}, {"page": 16, "excerpt": ""}]}]})
+        gap = {"task": "P0_room_outlines", "room": "KITCHEN", "room_names": ["KITCHEN"], "plan_page": None,
+               "pages": [7, 16], "note": "n"}
+        with patch.object(tasks, "_p0_main_geometry_pages", return_value=[{"page": 7}, {"page": 8}]), \
+                patch.object(tasks, "_inferred_rooms_for_plan", return_value=[]), \
+                patch.object(tasks, "_p0_wall_style_records", return_value=[]), \
+                patch.object(tasks, "_p0_context", return_value={}), \
+                patch.object(tasks, "_p0_calibration_ready", return_value=(None, "The sheet scale is unreadable.")), \
+                patch("backend.house_windows_service.is_dwelling", return_value=False):
+            with self.assertRaises(ValueError) as caught:
+                tasks.prepare_investigation(self.project, gap)
+        message = str(caught.exception)
+        # The room-use step read KITCHEN on page 7, so page 7 is its plan; what holds it back is the scale.
+        self.assertIn("for KITCHEN", message)
+        self.assertIn("page 7: the plan's scale is not settled (The sheet scale is unreadable.)", message)
+        self.assertNotIn("page 8", message)
+
+    def test_a_room_the_room_use_step_read_on_a_plan_is_on_that_plan(self):
+        write_json(self.root / "room_use_resolution.json", {"records": [
+            {"original_label": "KITCHEN", "evidence": [{"page": 7, "excerpt": "KITCHEN"}, {"page": 16, "excerpt": ""}]},
+            {"original_label": "Spa", "evidence": [{"page": 4, "excerpt": "SPA"}]}]})
+        self.assertEqual(tasks._room_use_names_on_page(self.root, 7), {"kitchen"})
+        self.assertEqual(tasks._room_use_names_on_page(self.root, 16), set())
+
+    def test_when_neither_outline_nor_size_can_be_asked_both_reasons_are_kept(self):
+        write_json(self.root / supervisor.JOB_FILE, {"status": "running"})
+        kitchen = room("KITCHEN", area_m2=None, area_source="", traces=[], pages=[7])
+
+        def prepare(project, gap):
+            raise ValueError(f"No {gap['task']} because of a reason.")
+        with patch.object(supervisor.tasks, "_refresh_geometry_tasks"), \
+                patch("backend.job_progress.stage_blocker", return_value=""), \
+                patch.object(supervisor, "ai_unavailable", return_value=""), \
+                patch.object(supervisor, "_rebuild", return_value=snapshot(kitchen)), \
+                patch.object(drawings, "_waiting", return_value=[]), \
+                patch.object(tasks, "prepare_investigation", side_effect=prepare):
+            result = supervisor.run(None, self.project)
+        reason = result["exceptions"][0]["tried"][0]["reason"]
+        self.assertIn("No P0_room_outlines because", reason)
+        self.assertIn("No P0_room_sizes because", reason)
 
 if __name__ == "__main__":
     unittest.main()

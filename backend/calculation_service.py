@@ -109,12 +109,63 @@ def status(web, project):
     return {**job, "readiness": readiness, "offer_start": bool(offer), "automatic_start_problem": auto.get("error", "") if offer else ""}
 
 
+# The files whose "finished" write is followed by the Phase 1 hand-off (job_runner and the envelope review). A hand-off
+# can only have been missed if one of them was written after the server's last startup check of that job began.
+HANDOFF_CHECKED_FILE = "phase1_handoff_checked.json"
+HANDOFF_TRIGGER_FILES = ("new_job_job.json", "page_preparation_job.json", "page_inventory_job.json",
+                         "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json",
+                         "calculation_job.json", "skill_workflow_run.json")
+
+
+def _handoff_maybe_missed(root):
+    """False only when no trigger file changed since the last startup check of this job began: nothing to recover.
+    Only the startup check notes the time (in its own thread at boot); a hand-off run by a finishing job doesn't, as
+    those run on job threads and a late write raced folder clean-up (2026-11-21). A job worked on since the last
+    restart is therefore checked in full once; the others are skipped."""
+    from backend.job_runner import read_json
+    checked = read_json(Path(root) / HANDOFF_CHECKED_FILE).get("started_ns")
+    if not isinstance(checked, int):
+        return True
+    for name in HANDOFF_TRIGGER_FILES:
+        try:
+            if (Path(root) / name).stat().st_mtime_ns > checked:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def maybe_start_phase1(web, project):
     from backend import ai_preliminary_service
     from backend.job_runner import read_json, write_json
+    from backend.job_progress import in_flight
     if web is None:
         return None
     current = web.project_by_id(project["id"]) if hasattr(web, "project_by_id") else project
+    if not current.get("review_dir"):
+        return None
+    # A finished later step may have exposed drawing questions after the drawing job ended.
+    # The handoff owns their delivery and then runs again with the new drawing evidence.
+    from backend import ai_provider, drawing_tasks_service as drawings
+    from backend.job_progress import stage_blocker
+    root = Path(current["review_dir"])
+    supervisor_job = read_json(root / "phase1_supervisor_job.json")
+    drawing_state = drawings.status(None, current)
+    waiting = drawings._waiting(root)
+    # One automatic follow-up pass per set of waiting questions: a pass re-runs the review, the model check and the
+    # calculation, and if it in turn leaves new questions the "Check and resume" button is offered instead of looping.
+    waiting_keys = sorted(f"{row.get('task')}:{row.get('target')}" for row in waiting)
+    follow_up_path = root / "drawing_follow_up.json"
+    follow_up = read_json(follow_up_path)
+    if (waiting and waiting_keys != follow_up.get("waiting") and int(follow_up.get("passes") or 0) < 1
+            and not supervisor_job.get("provider_limited")
+            and not drawing_state.get("provider_limited") and not drawing_state.get("unresolved")
+            and not in_flight(supervisor_job)
+            and not stage_blocker(current, "supervisor") and ai_provider.configured()
+            and drawings._JOB.key(current) not in drawings._JOB.running):
+        write_json(follow_up_path, {"waiting": waiting_keys, "passes": int(follow_up.get("passes") or 0) + 1})
+        drawings.start(web, current, then_skills=True)
+        return None
     if _phase1_drawing_problems(current, include_supervisor=False):
         return None
     from backend import phase1_supervisor_service as supervisor
@@ -158,7 +209,7 @@ def maybe_start_phase1(web, project):
 
 def reconcile_finished_reviews(web):
     """Recover a missed handoff after server restart, without restarting stopped AI jobs."""
-    from backend.job_runner import read_json
+    from backend.job_runner import read_json, write_json
     seen = set()
     for project in web.load_projects().values():
         if not isinstance(project, dict) or not project.get("id") or not project.get("reasoning_packet"):
@@ -173,10 +224,18 @@ def reconcile_finished_reviews(web):
         manifest = read_json(Path(root) / "skill_workflow_run.json")
         if manifest.get("scope") != "phase1_envelope" or manifest.get("status") not in {"completed", "needs_review", "provisional", "failed", "blocked"}:
             continue
+        if not _handoff_maybe_missed(root):
+            continue
+        started_ns = time.time_ns()
         try:
             maybe_start_phase1(web, project)
         except Exception:
             logging.getLogger(__name__).exception("Could not recover the completed drawing review handoff", extra={"project_id": project.get("id")})
+            continue
+        try:
+            write_json(Path(root) / HANDOFF_CHECKED_FILE, {"started_ns": started_ns})
+        except OSError:
+            pass
 
 
 def _include_map(data):
@@ -247,7 +306,9 @@ def start(web, project, data):
 
         def model_and_calculate():
             step("model")
-            ai_preliminary_service._assemble(web, web.project_by_id(project_id))
+            input_set = ai_preliminary_service._read(paths["current_set"], {})
+            if not input_set or ai_preliminary_service._stale_reasons(paths, input_set):
+                ai_preliminary_service._assemble(web, web.project_by_id(project_id))
             step("rooms")
             input_set = ai_preliminary_service._read(paths["current_set"], {})
             scope = ai_preliminary_service._room_scope_state(paths, input_set)
@@ -266,14 +327,24 @@ def start(web, project, data):
         review_run = ai_preliminary_service._read(paths["root"] / "skill_workflow_run.json", {}).get("run_id")
         resolved = False
         try:
-            model_and_calculate()
-        except ValueError as error:
-            if not NEEDS_INPUTS.search(str(error)):
-                raise
-            step("inputs")
-            _resolve_inputs(web, project_id)
-            resolved = True
-            model_and_calculate()
+            try:
+                model_and_calculate()
+            except ValueError as error:
+                if not NEEDS_INPUTS.search(str(error)):
+                    raise
+                step("inputs")
+                _resolve_inputs(web, project_id)
+                resolved = True
+                model_and_calculate()
+        except BaseException:
+            # The model was (re)assembled from the review's results before the calculation stopped: those rewritten
+            # files are still downstream of the review, so a failed calculation mustn't make it look out of date
+            # (Turramurra, 2026-11-18: "Missing required artifacts: hourly load model" after the rebuild).
+            try:
+                skill_workflow_service.take_in_downstream(web.project_by_id(project_id), review_run)
+            except BaseException:          # e.g. the job was cancelled meanwhile: the original error is what counts
+                logging.getLogger(__name__).debug("Could not record the review as taken in after a stopped calculation", exc_info=True)
+            raise
         project = web.project_by_id(project_id)
         project["updated_at"] = __import__("ai.ai_preliminary", fromlist=["now"]).now()
         web.update_project(project)

@@ -98,11 +98,11 @@ def _room_geometry_skill_proposals(root):
     source_pdf = _read(root / "ai_input.json", {}).get("source_files", {}).get("pdf")
     if source_pdf:
         try:
-            import pdfplumber
-            with pdfplumber.open(source_pdf) as pdf:
-                for page_number in {row.get("page") for row in proposal.get("proposal_fields", {}).get("geometry_candidates", []) if isinstance(row, dict)}:
-                    if isinstance(page_number, int) and 0 < page_number <= len(pdf.pages):
-                        pdf_widths[page_number] = pdf.pages[page_number - 1].width * 25.4 / 72.0
+            from backend import pdf_page_text_cache
+            pdf = pdf_page_text_cache.PdfText(root, source_pdf)     # page sizes, read once per PDF
+            for page_number in {row.get("page") for row in proposal.get("proposal_fields", {}).get("geometry_candidates", []) if isinstance(row, dict)}:
+                if isinstance(page_number, int) and 0 < page_number <= pdf.page_count:
+                    pdf_widths[page_number] = pdf.size(page_number)[0] * 25.4 / 72.0
         except (OSError, RuntimeError, ValueError):
             pdf_widths = {}
     review = _read(root / "skill_review_decisions.json", {})
@@ -382,6 +382,9 @@ def post(web, project, data):
         return {"id": project["id"], **_interpretations_response(root, web), **result, "status": "current"}
     if action != "build":
         raise ValueError("Calculation-input evidence supports build and component-interpretation actions.")
+    from backend import reviewer_room_geometry_service
+    # A job saved before separate same-named rooms were told apart is migrated before its evidence is rebuilt.
+    reviewer_room_geometry_service.split_repeated_room_traces(root)
     evidence = _build(root)
     existing = _read(paths["calculation_input_evidence"], {})
     reused = existing.get("fingerprint") == evidence.get("fingerprint") and existing.get("extractor_version") == EXTRACTOR_VERSION

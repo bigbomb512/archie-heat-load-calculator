@@ -275,6 +275,23 @@ class DesignConditionsTests(unittest.TestCase):
 
 
 class PageTests(unittest.TestCase):
+    def test_preliminary_label_is_on_cover_and_summary(self):
+        details = self.details()
+        details["result_label"] = {"status": "preliminary", "text": "Preliminary (2 answers that could change the unit still open)",
+                                   "reason": "The range is not settled."}
+        page = cr.render_html(details)
+        self.assertIn("<title>Preliminary (2 answers that could change the unit still open) cooling load", page)
+        self.assertIn("data-result-label", page)
+        self.assertIn("The range is not settled.", page)
+        self.assertIn("Preliminary (2 answers that could change the unit still open) cooling load for the whole building", page)
+
+    def test_design_label_is_on_cover_and_summary(self):
+        details = self.details()
+        details["result_label"] = {"status": "design", "text": "Design", "reason": "No unit-changing inputs remain open."}
+        page = cr.render_html(details)
+        self.assertIn("<h1>Design cooling load", page)
+        self.assertIn("Design cooling load for the whole building", page)
+
     def details(self):
         return {"name": "Test job", "address": "1 Street", "status": "draft", "generated_at": "now", "total_kw": 9.0,
                 "sensible_kw": 7.5, "latent_kw": 1.5, "peak_month": "January", "peak_hour": 15, "rooms_counted": 3,
@@ -283,6 +300,30 @@ class PageTests(unittest.TestCase):
                 "room_sizing": cr.room_sizing(REPORT, PLAN_ROOMS), "ducted": cr.ducted(9.0), "design_day": cr.design_day(REPORT),
                 "breakdown": cr.breakdown(REPORT["included_scope_peak"]), "room_values": [], "equipment": [], "envelope": [],
                 "assumed": [], "sources": cr.sources({}, False)}
+
+    def test_current_heating_replaces_cooling_only_notice_with_load_and_rooms(self):
+        details = self.details()
+        details["design_conditions"] = cr.design_conditions(CONDITIONS_REPORT, CONDITIONS_INPUT)
+        details["heating"] = {"status": "current", "total_kw": 3.3, "outdoor_design_c": -2.0,
+                              "indoor_design_c": 20.0, "draft": True, "gate": {"approved": False},
+                              "rooms": [{"name": "Living <north>", "peak_kw": 2.5,
+                                         "components": {"Walls, roof and floor conduction": 1.0,
+                                                        "Fresh air": 0.8}}]}
+        page = cr.render_html(details)
+        for expected in ("Design heating load", "3.3 kW", "-2 °C", "20 °C", "Living &lt;north&gt;",
+                         "2.5", "Walls, roof and floor conduction: 1.0 kW",
+                         "Draft: heating method gate not approved by an engineer"):
+            self.assertIn(expected, page)
+        self.assertNotIn("no winter (heating) design temperature or heating load is calculated", page)
+
+    def test_missing_or_not_calculated_heating_keeps_notice(self):
+        details = self.details()
+        details["design_conditions"] = cr.design_conditions(CONDITIONS_REPORT, CONDITIONS_INPUT)
+        self.assertIn("no winter (heating) design temperature or heating load is calculated", cr.render_html(details))
+        details["heating"] = {"status": "not_calculated", "reason": "No heating report has been calculated for this job."}
+        page = cr.render_html(details)
+        self.assertIn("Heating is not calculated", page)
+        self.assertIn("No heating report has been calculated for this job", page)
 
     def test_the_page_carries_the_label_sizes_charts_and_sources(self):
         details = self.details()

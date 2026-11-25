@@ -228,10 +228,19 @@ class BackgroundJob:
                 check()
                 yield
 
+        timing, current = {}, [self.steps[0][0], started]  # seconds per finished step, in run order
+
+        def close_step():
+            key, since = current
+            if key is not None:
+                timing[key] = round(timing.get(key, 0) + time.monotonic() - since, 1)
+
         def step(key, label=None):
             with guard():
+                close_step()
+                current[:] = [key, time.monotonic()]
                 job = read_json(path)
-                job.update(step=key, step_label=label or self.labels[key])
+                job.update(step=key, step_label=label or self.labels[key], timing=dict(timing))
                 _write_json(path, job)
 
         _context.check, _context.guard = check, guard
@@ -254,7 +263,9 @@ class BackgroundJob:
                     if job.get("restart_requested"):
                         replacement = self._create(project, fields)
                     else:
-                        job.update(outcome, finished_at=now(), seconds=round(time.monotonic() - started, 1))
+                        close_step()
+                        job.update(outcome, finished_at=now(), seconds=round(time.monotonic() - started, 1),
+                                   timing=dict(timing))
                         _write_json(path, job)
                         self.running.discard(self.key(project))
                 else:
@@ -265,7 +276,8 @@ class BackgroundJob:
 
             elif outcome.get("status") == "done" and self.file_name in {
                     "new_job_job.json", "page_preparation_job.json", "page_inventory_job.json",
-                    "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json"} and web is not None:
+                    "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json",
+                    "calculation_job.json"} and web is not None:
                 try:
                     from backend.calculation_service import maybe_start_phase1
                     maybe_start_phase1(web, project)

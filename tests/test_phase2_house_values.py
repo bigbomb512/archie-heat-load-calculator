@@ -12,6 +12,7 @@ import unittest
 
 from ai import (ai_preliminary, airflow_resolution, ceiling_volume_resolution, house_household, house_profiles,
                 internal_gains_resolution, room_use_resolution, value_resolution)
+from tests.kitchen_fixture import cooled_kitchen
 
 SPACES = [("MASTER BEDROOM", 16), ("BED 2", 11), ("LIVING", 30), ("KITCHEN", 15), ("HALL", 8)]
 
@@ -27,10 +28,11 @@ def wall(room, area=20.0):
 def house(equipment=None, outside_walls=("MASTER BEDROOM", "LIVING")):
     building = {"spaces": [{"name": name, "level_name": "Ground", "area_m2": area, "ceiling_height_mm": 2700,
                             "evidence": [{"page": 1, "excerpt": name}]} for name, area in SPACES]}
-    proposal = {"rooms": [{"kind": "room", "label": name, "level_name": "Ground", "area_m2": area,
+    proposal = {"rooms": [cooled_kitchen({"kind": "room", "label": name, "level_name": "Ground", "area_m2": area,
                            "preliminary_profile_id": "residential", "confidence": .8, "page": 1,
                            "evidence": [{"page": 1, "excerpt": name}], "ceiling_height_mm": 2700,
-                           **({"equipment": equipment, "equipment_catalogue_managed": True} if equipment and name == "KITCHEN" else {})}
+                           **({"equipment": equipment, "equipment_catalogue_managed": True} if equipment and name == "KITCHEN" else {})},
+                          "comfort_hvac")
                           for name, area in SPACES]}
     uses = room_use_resolution.resolve(building, proposal=proposal,
                                        dwelling_context={"is_dwelling": True, "evidence": [{"page": 1, "excerpt": "BASIX"}]})

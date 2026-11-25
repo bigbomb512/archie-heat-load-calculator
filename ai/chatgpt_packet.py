@@ -3,6 +3,7 @@
 """Create a compact manual-ChatGPT geometry review packet."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 from ai.ai_packet import load_json
+from pdf_pipeline import page_pool
 
 
 DEFAULT_DPI = 180
@@ -19,7 +21,11 @@ MAX_RAW_VECTORS_PER_PAGE = 48
 MAX_DIMENSIONS_PER_PAGE = 16
 
 
-def create_chatgpt_packet(ai_input_path, output_dir=None, zip_packet=True, dpi=DEFAULT_DPI, stage="full"):
+def create_chatgpt_packet(ai_input_path, output_dir=None, zip_packet=True, dpi=DEFAULT_DPI, stage="full",
+                          page_images=None, return_page_images=False):
+    """Build the packet folder. page_images are the screenshot rows an earlier call returned (with
+    return_page_images=True) for the same packet; they are reused instead of rendering every page again
+    when they still cover the same pages, PDF and dpi and their files are on disk."""
     ai_input_path = Path(ai_input_path)
     ai_input = load_json(ai_input_path)
     output_dir = Path(output_dir or ai_input_path.with_name("chatgpt_packet"))
@@ -27,8 +33,11 @@ def create_chatgpt_packet(ai_input_path, output_dir=None, zip_packet=True, dpi=D
 
     screenshots_dir = output_dir / "screenshots"
     screenshots_dir.mkdir(exist_ok=True)
-    clear_pngs(screenshots_dir)
-    screenshots = create_page_images(ai_input, ai_input_path.parent, screenshots_dir, dpi)
+    if reusable_page_images(page_images, ai_input, screenshots_dir, dpi):
+        screenshots = [dict(item) for item in page_images]
+    else:
+        clear_pngs(screenshots_dir)
+        screenshots = create_page_images(ai_input, ai_input_path.parent, screenshots_dir, dpi)
 
     prompt_path = output_dir / "prompt.md"
     manifest_path = output_dir / "manifest.json"
@@ -57,30 +66,46 @@ def create_chatgpt_packet(ai_input_path, output_dir=None, zip_packet=True, dpi=D
     }
     if zip_packet:
         result["zip"] = str(zip_chatgpt_packet(output_dir, include_screenshots=True))
+    if return_page_images:
+        result["page_images"] = screenshots
     return result
 
 
+def reusable_page_images(page_images, ai_input, screenshots_dir, dpi):
+    """True when earlier screenshot rows are exactly what create_page_images would render now."""
+    if not page_images:
+        return False
+    wanted = [image.get("page") for image in selected_images(ai_input)]
+    return ([item.get("page") for item in page_images] == wanted
+            and all(item.get("render_dpi") == dpi and item.get("source_pdf") == ai_input.get("source_pdf", "")
+                    and item.get("render_status") == "rendered_high_res" and item.get("packet_path")
+                    and Path(item["packet_path"]).parent == screenshots_dir and Path(item["packet_path"]).is_file()
+                    for item in page_images))
+
+
 def create_page_images(ai_input, base_dir, screenshots_dir, dpi):
-    copied = []
-    for image in selected_images(ai_input):
+    """Render each selected page to its own PNG. Each render is a pdftoppm process, so pages run side by side."""
+    images = selected_images(ai_input)
+
+    def page_image(image):
         filename = f"page_{int(image['page']):03d}_{safe_name(image.get('type', 'context'))}.png"
         target = screenshots_dir / filename
         status = render_high_res_page(ai_input, image, target, dpi)
         if not status["ok"]:
             status = copy_thumbnail(base_dir, image, target, status["reason"])
-        copied.append(
-            dict(
-                image,
-                packet_path=str(target) if target.exists() else "",
-                packet_filename=f"screenshots/{filename}" if target.exists() else "",
-                source_pdf=ai_input.get("source_pdf", ""),
-                render_dpi=dpi,
-                render_status=status["status"],
-                quality=status["quality"],
-                render_note=status["reason"],
-            )
+        return dict(
+            image,
+            packet_path=str(target) if target.exists() else "",
+            packet_filename=f"screenshots/{filename}" if target.exists() else "",
+            source_pdf=ai_input.get("source_pdf", ""),
+            render_dpi=dpi,
+            render_status=status["status"],
+            quality=status["quality"],
+            render_note=status["reason"],
         )
-    return copied
+
+    with ThreadPoolExecutor(max_workers=page_pool.worker_count(len(images))) as pool:
+        return list(pool.map(page_image, images))
 
 
 def create_geometry_context(ai_input, base_dir, output_dir, screenshots):

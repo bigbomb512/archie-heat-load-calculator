@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from ai import reviewer_room_geometry, room_inference
-from ai.room_use_resolution import room_identity
+from ai.room_use_resolution import replaced_label_keys, room_identity
 
 
 def base_proposal(run):
@@ -48,7 +48,11 @@ USE_NAMED_ROOMS_FILE = "ai_named_rooms.json"
 def save_use_named_rooms(root, task, page, level_name, labels, run_id, named_on_plan=False,
                          derived_from_repeated_label=False):
     """Record the rooms one drawing step named by their use on one plan page (replacing that step's earlier answer for
-    the page; the enclosed-area naming and the open-plan outlines keep theirs separately)."""
+    the page; the enclosed-area naming and the open-plan outlines keep theirs separately).
+
+    derived_from_repeated_label is the drawing's label when these are separate rooms numbered from one name printed on
+    several of them (True means "Bedroom", the original use): that label's merged record on the level is replaced."""
+    repeated = "Bedroom" if derived_from_repeated_label is True else str(derived_from_repeated_label or "").strip()
     path = Path(root) / USE_NAMED_ROOMS_FILE
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
@@ -57,8 +61,27 @@ def save_use_named_rooms(root, task, page, level_name, labels, run_id, named_on_
     pages = saved.get("pages") if isinstance(saved.get("pages"), dict) else {}
     pages[f"{task}:page-{int(page)}"] = [{"label": label, "level_name": level_name or "Unassigned level", "page": int(page), "run_id": run_id,
                                           **({"named_on_plan": True} if named_on_plan else {}),
-                                          **({"derived_from_repeated_label": "Bedroom"} if derived_from_repeated_label else {})}
+                                          **({"derived_from_repeated_label": repeated} if repeated else {})}
                         for label in labels]
+    path.write_text(json.dumps({"schema_version": 1, "pages": {key: rows for key, rows in pages.items() if rows}}, indent=2),
+                    encoding="utf-8")
+
+
+def save_numbered_rooms(root, task, page, level_name, rows, run_id):
+    """Record the separate rooms one drawing step numbered from a name printed on several of them, as (label, drawing
+    label) pairs ("Ensuite (2)", "Ensuite"), replacing that step's earlier numbering for the page."""
+    path = Path(root) / USE_NAMED_ROOMS_FILE
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        saved = {}
+    pages = saved.get("pages") if isinstance(saved.get("pages"), dict) else {}
+    key = f"{task}:page-{int(page)}"
+    entries = [{"label": label, "level_name": level_name or "Unassigned level", "page": int(page), "run_id": run_id,
+                "derived_from_repeated_label": str(repeated).strip()} for label, repeated in rows]
+    if entries == pages.get(key, []):
+        return                          # unchanged (also: nothing numbered and nothing saved before)
+    pages[key] = entries
     path.write_text(json.dumps({"schema_version": 1, "pages": {key: rows for key, rows in pages.items() if rows}}, indent=2),
                     encoding="utf-8")
 
@@ -80,6 +103,22 @@ def numbered_bedroom_levels(root):
             if row.get("derived_from_repeated_label") == "Bedroom"}
 
 
+def replaced_repeated_labels(root):
+    """(label, level) keys, casefolded, of merged same-name records that separately numbered rooms replace: a level's
+    plain "Bedroom" once Bedroom 1, 2 exist, its plain "Ensuite" once Ensuite (1), (2), (3) exist."""
+    keys = set()
+    for row in use_named_rooms(root):
+        if row.get("derived_from_repeated_label"):
+            keys |= replaced_label_keys(row["derived_from_repeated_label"], row.get("level_name"))
+    return keys
+
+
+def is_replaced(row, replaced):
+    """Whether a room row (any registry's shape) is a merged record that numbered rooms replace."""
+    label = str(row.get("label") or row.get("name") or row.get("original_label") or "").strip().casefold()
+    return (label, str(row.get("level_name") or row.get("level") or "Unassigned level").strip().casefold()) in replaced
+
+
 def proposal_room(row):
     """A reviewer-added room in the proposal-room shape detection produces."""
     page = row.get("page") if isinstance(row.get("page"), int) else None
@@ -93,10 +132,8 @@ def proposal_room(row):
 def room_proposal(run, root):
     """Base proposal plus reviewer-added rooms and rooms found in scanned plans."""
     proposal = base_proposal(run)
-    numbered_levels = numbered_bedroom_levels(root)
-    proposal["rooms"] = [row for row in proposal["rooms"]
-                         if not (str(row.get("label") or "").strip().casefold() in {"bedroom", "bed"}
-                                 and str(row.get("level_name") or "Unassigned level").casefold() in numbered_levels)]
+    replaced = replaced_repeated_labels(root)
+    proposal["rooms"] = [row for row in proposal["rooms"] if not is_replaced(row, replaced)]
     existing = {room_identity(row.get("label", ""), row.get("level_name") or "Unassigned level")
                 for row in proposal["rooms"] if isinstance(row, dict)}
     for row in reviewer_rooms(root):
@@ -112,14 +149,15 @@ def room_proposal(run, root):
         if identity in existing:
             continue
         on_plan = row.get("named_on_plan") is True
-        numbered = row.get("derived_from_repeated_label") == "Bedroom"
+        repeated = str(row.get("derived_from_repeated_label") or "").strip()
+        numbered = bool(repeated)
         proposal["rooms"].append({"kind": "room", "room_id": identity, "label": row["label"], "level_name": row["level_name"],
             "page": row["page"], "source_pages": [row["page"]], "source": "numbered_from_repeated_label" if numbered else "named_on_plan" if on_plan else "named_by_use",
-            "confidence": 0.6,
-            "evidence": [{"page": row["page"], "reference": ("Separate enclosed area printed BEDROOM; numbered in plan reading order" if numbered else
+            "confidence": 0.6, **({"repeated_label": repeated} if numbered else {}),
+            "evidence": [{"page": row["page"], "reference": (f"Separate enclosed area printed {repeated.upper()}; numbered in plan reading order" if numbered else
                                                              "Room name drawn on the plan, read by the page reading" if on_plan else
                                                              "Room named by its use: the drawings print no name for this space"),
-                          "excerpt": "BEDROOM" if numbered else row["label"]}]})
+                          "excerpt": repeated.upper() if numbered else row["label"]}]})
         existing.add(identity)
     tasks = Path(root) / "ai_tasks" / "S1_printed_areas"
     for pointer in tasks.glob("*/current.json"):
@@ -136,6 +174,8 @@ def room_proposal(run, root):
                 continue
             label = str(area["label"]).strip()
             level = str(area.get("level_name") or "Unassigned level").strip()
+            if is_replaced({"label": label, "level_name": level}, replaced):
+                continue                # one area printed for a name now numbered per room: it is no one room's area
             identity = room_identity(label, level)
             citation = {"page": page, "reference": "Printed room area read from image",
                         "excerpt": str(area.get("printed_text") or label)}

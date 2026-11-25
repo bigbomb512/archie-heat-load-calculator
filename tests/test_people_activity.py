@@ -3,6 +3,7 @@
 import unittest
 
 from ai import ai_preliminary, internal_gains_resolution, room_use_resolution
+from tests.kitchen_fixture import cooled_kitchen
 
 
 class PeopleActivityTests(unittest.TestCase):
@@ -10,7 +11,8 @@ class PeopleActivityTests(unittest.TestCase):
         spaces = [("Kitchen", 60, "hospitality"), ("Dining", 120, "hospitality")]
         building = {"spaces": [{"name": name, "level_name": "Ground", "area_m2": area, "evidence": [{"page": 2, "excerpt": name.upper()}]}
                                for name, area, _profile in spaces]}
-        proposal = {"rooms": [{"kind": "room", "label": name, "level_name": "Ground", "area_m2": area, "preliminary_profile_id": profile, "page": 2}
+        proposal = {"rooms": [cooled_kitchen({"kind": "room", "label": name, "level_name": "Ground", "area_m2": area,
+                                              "preliminary_profile_id": profile, "page": 2})
                               for name, area, profile in spaces]}
         use = room_use_resolution.resolve(building, proposal=proposal, source_fingerprints={})
         gains = internal_gains_resolution.resolve(building, proposal=proposal, room_use=use, pack=ai_preliminary.load_pack(),

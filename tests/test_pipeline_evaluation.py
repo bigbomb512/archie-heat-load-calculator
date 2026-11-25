@@ -98,8 +98,9 @@ def make_project(root, *, reviewed=True, later=True):
 
 
 def snapshot(root):
+    # Freshness checks may populate this rebuildable cache; report artifacts must remain untouched.
     return {str(path.relative_to(root)): (path.stat().st_mtime_ns, path.stat().st_size)
-            for path in root.rglob("*") if path.is_file()}
+            for path in root.rglob("*") if path.is_file() and path.name != "preliminary_geometry_fingerprint.cache"}
 
 
 def main():
@@ -156,7 +157,7 @@ def main():
         check("scorecard retains each page level status",
               report["stages"]["drawing_coverage"]["counts"]["page_level_statuses"],
               [{"page": 1, "status": "confirmed_by_text"}, {"page": 2, "status": "missing"}])
-        check("scorecard does not change project files", snapshot(complete), before)
+        check("scorecard does not change persisted project artifacts", snapshot(complete), before)
 
         gated = base / "gated"
         gated.mkdir()

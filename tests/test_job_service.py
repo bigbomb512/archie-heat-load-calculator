@@ -52,6 +52,26 @@ class JobServiceTests(unittest.TestCase):
         self.assertEqual(working["needs_you"]["phase1"], 0)
         self.assertEqual(finished["needs_you"]["phase1"], 1)
 
+    def test_jobs_list_facts_are_saved_and_reused_after_a_restart_until_a_result_file_changes(self):
+        # The first jobs list after a server restart re-read every job's large result files (~5 s on 26 jobs).
+        (self.root / "ai_preliminary_input_set.json").write_text(json.dumps({"input_fingerprint": "fp-1"}))
+        job_service._RESULT_FACTS.clear()
+        self.assertEqual(job_service._saved_result_facts(self.root)["current_fingerprint"], "fp-1")
+        self.assertTrue((self.root / job_service.RESULT_FACTS_FILE).is_file())
+        job_service._RESULT_FACTS.clear()                      # a server restart
+        with patch.object(job_service, "_read", wraps=job_service._read) as read:
+            self.assertEqual(job_service._saved_result_facts(self.root)["current_fingerprint"], "fp-1")
+        self.assertEqual([call.args[0].name for call in read.call_args_list], [job_service.RESULT_FACTS_FILE])
+        (self.root / "ai_preliminary_input_set.json").write_text(json.dumps({"input_fingerprint": "fp-2-changed"}))
+        job_service._RESULT_FACTS.clear()
+        self.assertEqual(job_service._saved_result_facts(self.root)["current_fingerprint"], "fp-2-changed")
+        # A saved file of another format version is not trusted.
+        saved = json.loads((self.root / job_service.RESULT_FACTS_FILE).read_text())
+        saved["schema"], saved["facts"]["current_fingerprint"] = -1, "stale"
+        (self.root / job_service.RESULT_FACTS_FILE).write_text(json.dumps(saved))
+        job_service._RESULT_FACTS.clear()
+        self.assertEqual(job_service._saved_result_facts(self.root)["current_fingerprint"], "fp-2-changed")
+
     def test_project_list_summary_reads_saved_artifacts_without_a_freshness_rebuild(self):
         from backend import autonomous_tasks_service
         fingerprint = "saved-input-fingerprint"

@@ -5,7 +5,6 @@ import base64
 from copy import deepcopy
 import hashlib
 import ipaddress
-import mimetypes
 import os
 import sys
 import html
@@ -94,7 +93,7 @@ from backend import draft_service
 from backend import calculation_extraction_service
 from backend import (drawing_tasks_service, room_use_resolution_service, room_inference_service,
     reviewer_room_geometry_service, ai_preliminary_service, au_ventilation_rules_service, job_service,
-    page_preparation_service, calculation_service, page_inventory_service, page_extraction_service, ai_provider,
+    calculation_service, page_inventory_service, page_extraction_service, ai_provider,
     result_status_service)
 from backend import productization, skill_workflow_service
 from backend import security
@@ -145,6 +144,14 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_PDF_BYTES = 250 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 PUBLIC_ASSET_SUFFIXES = {".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".woff", ".woff2", ".ttf", ".ico", ".html"}
+ARTIFACT_CONTENT_TYPES = {
+    ".pdf": "application/pdf", ".html": "text/html; charset=utf-8",
+    ".json": "application/json", ".jsonl": "application/x-ndjson",
+    ".zip": "application/zip", ".csv": "text/csv; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8", ".png": "image/png",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml",
+    ".webp": "image/webp", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 
 class CalculatorInputConflict(Exception):
@@ -153,6 +160,19 @@ class CalculatorInputConflict(Exception):
     def __init__(self, message, changed_sources=None):
         super().__init__(message)
         self.changed_sources = list(changed_sources or [])
+
+
+# The browser closed the connection before the answer was sent.
+CLIENT_GONE_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
+
+class ArchieHTTPServer(ThreadingHTTPServer):
+    """The web server, quiet about browsers that leave before their answer is sent (a static file cut short)."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], CLIENT_GONE_ERRORS):
+            return
+        super().handle_error(request, client_address)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -419,6 +439,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary", "/api/job-summary", "/api/result-label",
+                                        "/api/ac-design-input", "/api/assumption-range", "/api/architect-questions"}:
+            try:
+                handler = {"/api/setpoint-comparison": api_setpoint_comparison, "/api/heating-summary": api_heating_summary,
+                           "/api/job-summary": api_job_summary, "/api/result-label": api_result_label, "/api/ac-design-input": api_ac_design_input,
+                           "/api/assumption-range": api_assumption_range,
+                           "/api/architect-questions": api_architect_questions}[urlparse(self.path).path]
+                return self.send_json(handler(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if self.path.startswith("/api/audit-log"):
             try:
                 return self.send_json(api_audit_log(self))
@@ -502,6 +534,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/architect-questions":
+            try:
+                return self.send_json(api_save_architect_questions(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/quick-fix":
             try:
                 return self.send_json(api_save_quick_fix(self))
@@ -512,6 +551,20 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path in {"/api/job-setup", "/api/room-area-override", "/api/room-height-override"}:
             try:
                 return self.send_json(api_save_job(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/room-join":
+            try:
+                return self.send_json(api_room_join(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/project-archive":
+            try:
+                return self.send_json(api_project_archive(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -620,11 +673,8 @@ class Handler(SimpleHTTPRequestHandler):
         return str(asset) if asset else str(FRONTEND / "__not_found__")
 
     def send_file(self, path, content_type):
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_common_headers()
-        self.end_headers()
-        self.wfile.write(path.read_bytes())
+        body = path.read_bytes()
+        self._send_body(200, content_type, body)
 
     def send_artifact(self):
         query = parse_qs(urlparse(self.path).query)
@@ -634,38 +684,54 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError("Artifact reference is incomplete.")
         project = project_by_id(project_id)
         identity = self._identity()
+        review_base = WEB_REVIEW.resolve()
         root = Path(project.get("review_dir", "")).resolve()
-        if not root.is_dir() or not artifact or "\x00" in artifact:
+        if project_id != Path(project_id).name or root != review_base / project_id or not root.is_dir():
             raise ValueError("Artifact is unavailable.")
+        # Only a relative path made of ordinary components may be resolved.
+        # This also keeps control characters out of filesystem names and responses.
+        if ("\\" in artifact or any(ord(char) < 32 or ord(char) == 127 for char in artifact)
+                or any(part in {"", ".", ".."} for part in artifact.split("/"))):
+            raise security.SecurityError("Artifact path rejected.")
         candidate = (root / artifact).resolve()
         try:
             candidate.relative_to(root)
         except ValueError as error:
             raise security.SecurityError("Artifact path rejected.") from error
-        if not candidate.is_file():
-            raise ValueError("Artifact is unavailable.")
         # Viewers may use immutable report packages only. Raw evidence and PDFs
         # remain editor-only even when their artifact identifier is known.
         is_package = "report_packages" in candidate.relative_to(root).parts
         security.require_project_role(project, identity, "viewer" if is_package else "editor")
-        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        if not candidate.is_file():
+            raise ValueError("Artifact is unavailable.")
+        content_type = ARTIFACT_CONTENT_TYPES.get(candidate.suffix.lower(), "application/octet-stream")
         self.send_file(candidate, content_type)
 
     def send_html(self, body, status=200):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_common_headers()
-        self.end_headers()
-        self.wfile.write(body.encode("utf-8"))
+        self._send_body(status, "text/html; charset=utf-8", body.encode("utf-8"))
 
     def send_json(self, data, status=200):
         if security.config().production and isinstance(data, dict) and data.get("error"):
             data = {"error": "Request could not be completed.", "code": data.get("code", "request_failed")}
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_common_headers()
-        self.end_headers()
-        self.wfile.write(json.dumps(data, indent=2).encode("utf-8"))
+        self._send_body(status, "application/json; charset=utf-8", json.dumps(data, indent=2).encode("utf-8"))
+
+    def _send_body(self, status, content_type, body):
+        """Send one response. A browser that has already gone (the page was closed, or a newer poll replaced this
+        request) is not an error: the answer is dropped quietly. Raising here made every route's error handler try to
+        send a 400 down the same closed connection, which printed two Broken pipe tracebacks per dropped request
+        (2026-11-20)."""
+        if getattr(self, "_client_gone", False):
+            return None
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_common_headers()
+            self.end_headers()
+            self.wfile.write(body)
+        except CLIENT_GONE_ERRORS:
+            self._client_gone = True
+            self.close_connection = True
+        return None
 
     def send_common_headers(self):
         # Archie is same-origin.  Deliberately do not grant cross-origin access.
@@ -1214,10 +1280,11 @@ def _job_report_details(project, stale_reasons):
     """What the Results page shows, for the contractor's report: the final load, design basis, components, rooms,
     months and what is still assumed."""
     from collections import Counter
-    from backend import job_plan_service, result_status_service
+    from backend import job_plan_service, result_label_service, result_status_service
     web = sys.modules[__name__]
     plan = job_plan_service.get(web, project)
     report = plan.get("final_report") or {}
+    result_label = result_label_service.label(project, status=plan.get("status") or {})
     peak = report.get("included_scope_peak") or {}
     setup = job_service.job_setup(project)
     basis = (report.get("design_conditions_basis") or {}).get("design_day") or {}
@@ -1241,10 +1308,13 @@ def _job_report_details(project, stale_reasons):
     household = peak.get("household_counted_once") or {}
     from backend import contractor_report
     contractor = _contractor_details(project, plan, peak)
+    from backend import heating_summary_service
+    heating = heating_summary_service.get(web, project)
     design_basis = (f"Summer design days for {basis.get('location', 'the site')}"
                     f"{', ' + basis['state'] if basis.get('state') else ''}, from {basis.get('source', 'the listed design data')}; "
                     "the 21st of each month calculated hour by hour with the site's sun.")
     return {
+        "result_label": result_label,
         "name": setup.get("name") or str(project.get("name") or project["id"]).removesuffix(".pdf"),
         "address": setup.get("address") or plan.get("status", {}).get("found_site") or "",
         "status": report.get("status", "draft"), "generated_at": productization._now(),
@@ -1260,6 +1330,7 @@ def _job_report_details(project, stale_reasons):
         "exclusions": list(dict.fromkeys(f"{row.get('component')}: {row.get('reason')}"
                                          for row in report.get("known_exclusions") or [] if isinstance(row, dict))),
         "stale_reasons": stale_reasons,
+        "heating": heating,
         **contractor,
         # The temperatures first: a contractor checks the design conditions before anything else (2026-11-15).
         "design_basis": " ".join(part for part in (contractor_report.design_conditions_text(contractor.get("design_conditions")),
@@ -1270,7 +1341,7 @@ def _job_report_details(project, stale_reasons):
 def _contractor_details(project, plan, peak):
     """Unit sizes, the design day by the hour, the load by group and the values used, from the job's full hourly
     report and input set (the plan carries only a summary of them)."""
-    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report, setpoint_comparison
+    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report, setpoint_comparison_service
     paths = ai_preliminary_service._paths(project)
     full = load_json(paths["report"]) if paths["report"].exists() else {}
     input_set = load_json(paths["current_set"]) if paths["current_set"].exists() else {}
@@ -1285,7 +1356,8 @@ def _contractor_details(project, plan, peak):
         "ducted": contractor_report.ducted(peak.get("final_design_total_kw", peak.get("design_total_kw")) or 0.0, dwelling),
         "design_day": contractor_report.design_day(full),
         "engineer_rooms": contractor_report.engineer_room_details(full, input_set, plan_rooms),
-        "setpoint_comparison": setpoint_comparison.compare(input_set, full),
+        # From the inputs this result was calculated from (not a newer input set), as the Results page shows it.
+        "setpoint_comparison": setpoint_comparison_service.get(project, full=True),
         "ahu": contractor_report.ahu_results(ahu_report, full, input_set, plan_rooms, ahu_resolution, dwelling),
         "breakdown": contractor_report.breakdown(full["included_scope_peak"] if (full.get("included_scope_peak") or {}).get("components")
                                                  else peak),
@@ -2706,6 +2778,78 @@ def api_job_plan(request):
     return job_plan_service.get(sys.modules[__name__], project)
 
 
+def api_setpoint_comparison(request):
+    """Read-only: the indoor setpoint comparison for the job's saved cooling result (worked out once per result)."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import setpoint_comparison_service
+    return {"project_id": project["id"], **setpoint_comparison_service.get(project)}
+
+
+def api_heating_summary(request):
+    """Read-only: the job's design heating load from its saved heating report, or why there is none."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import heating_summary_service
+    return {"project_id": project["id"], **heating_summary_service.get(sys.modules[__name__], project)}
+
+
+def api_assumption_range(request):
+    """Read-only: how far the saved cooling load could move with the facts the drawings don't settle, one unknown at a
+    time (worked out once per saved result, in the background, on a copy of the job)."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import assumption_range_service
+    return {"project_id": project["id"], **assumption_range_service.get(project)}
+
+
+def api_architect_questions(request):
+    """Read-only: the "Ask the architect" list, ranked by how much each answer could move the load."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import architect_questions_service
+    return {"project_id": project["id"], **architect_questions_service.get(project)}
+
+
+def api_save_architect_questions(request):
+    """Mark questions asked (or not), or put an architect's answer in (window glass, a construction, north)."""
+    from backend import architect_questions_service, calculation_service
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or "")
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if data.get("action") == "answer" and calculation_service._JOB.status(project).get("status") in {"queued", "running", "stopping"}:
+        raise ValueError("A calculation is running. Wait for it to finish, then save the answer.")
+    return {"project_id": project["id"], **architect_questions_service.post(sys.modules[__name__], project, data)}
+
+
+def api_job_summary(request):
+    """Read-only: the job's answer so far (the saved load, how complete it is) and its one to-do list, ordered by how
+    much each item could change the load, for the card at the top of every job step."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import job_summary_service
+    return {"project_id": project["id"], **job_summary_service.get(sys.modules[__name__], project)}
+
+
+def api_result_label(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import job_service, result_label_service
+    return {"project_id": project["id"], **result_label_service.label(
+        project, status=job_service.status(sys.modules[__name__], project))}
+
+
 def api_save_job(request):
     """Job setup (name, address, building type, what's above), typed room areas and ceiling heights."""
     data = read_json_body(request)
@@ -3621,6 +3765,92 @@ def upload_response(project):
     }
 
 
+def api_ac_design_input(request):
+    """Read-only: the saved cooling load as the AC system design starts from it (docs/ac-design-input.md)."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import ac_design_input_service
+    return ac_design_input_service.api(sys.modules[__name__], project)
+
+
+def api_room_join(request):
+    """Join rooms the drawing reader split into pieces into one room, or split a joined room again."""
+    from backend import room_join_service
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or "")
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Check the house"
+    return room_join_service.api(sys.modules[__name__], project, data, reviewer)
+
+
+def normalise_site_address(address):
+    address = str(address or "").casefold().strip()
+    address = re.sub(r"\b(?:lot(?:\s+\w+)?|dp\s*\d+)\b.*$", "", address).strip()
+    address = re.sub(r"\b(?:nsw|vic|qld|sa|wa|tas|act|nt)\s*\d{4}\b\W*$", "", address).strip()
+    return " ".join(re.findall(r"\w+", address))
+
+
+def _saved_cooling_load(project):
+    if not project.get("review_dir"):
+        return None, "none"
+    from backend import ai_preliminary_service
+    paths = ai_preliminary_service._paths(project)
+
+    def total(report, *, final):
+        peak = (report.get("included_scope_peak") or {}) if isinstance(report, dict) else {}
+        value = peak.get("final_design_total_kw") if final else peak.get("design_total_kw")
+        if value is None:
+            value = peak.get("design_total_kw") if final else peak.get("final_design_total_kw")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def stamp(path):
+        try:
+            stat = Path(path).stat()
+            return [stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)]
+        except OSError:
+            return None
+
+    # The saved reports are several MB each: a fresh server would parse every job's report to draw the Jobs list.
+    # The two totals are kept beside them, keyed to each report's saved version, so that happens once per save.
+    cache_path = Path(paths["root"]) / "job_list_load.json"
+    stamps = {"final": stamp(paths["report"]), "base": stamp(paths["base_report"])}
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = {}
+    if cached.get("version") == 1 and cached.get("stamps") == stamps:
+        final_kw, base_kw = cached.get("final_kw"), cached.get("base_kw")
+    else:
+        final_kw = ai_preliminary_service._file_derived(paths["report"], {}, "jobs_final_kw", lambda report: total(report, final=True))
+        base_kw = None if final_kw is not None else ai_preliminary_service._file_derived(
+            paths["base_report"], {}, "jobs_base_kw", lambda report: total(report, final=False))
+        try:
+            ai_preliminary_service._write(cache_path, {"version": 1, "stamps": stamps, "final_kw": final_kw, "base_kw": base_kw})
+        except OSError:
+            pass
+    if final_kw is not None:
+        return final_kw, "final"
+    return (base_kw, "building_only") if base_kw is not None else (None, "none")
+
+
+def group_site_jobs(items):
+    groups = []
+    by_address = {}
+    for item in items:
+        address = normalise_site_address(item.get("address") or item.get("found_site"))
+        key = (bool(item.get("archived")), address)
+        if address and key in by_address:
+            groups[by_address[key]]["earlier_runs"].append(item)
+        else:
+            groups.append({**item, "earlier_runs": []})
+            if address:
+                by_address[key] = len(groups) - 1
+    return groups
+
+
 def project_list(identity=None):
     projects = list(load_projects().values())
     # Isolated local walkthroughs can leave metadata in the project registry;
@@ -3646,6 +3876,8 @@ def project_list(identity=None):
             "created_at": project.get("created_at", ""),
             "updated_at": project.get("updated_at", ""),
             "revision": project.get("analysis_version", "") or project.get("revision", ""),
+            "archived": project.get("archived") is True,
+            "can_edit": identity is None or identity.development or security.role_for_project(project, identity) in {"owner", "editor"},
         }
         # Keep the jobs page responsive when the registry contains many large
         # drawing sets. Full freshness checks run after a job is opened.
@@ -3661,8 +3893,19 @@ def project_list(identity=None):
                          "drawings_confirmed": False, "phase1_complete": False, "phase2_complete": False, "results_ready": False,
                          "address": "", "found_site": "", "result_stale": False,
                          "display_name": str(project["name"]).removesuffix(".pdf")})
+        item["cooling_load_kw"], item["cooling_load_kind"] = _saved_cooling_load(project)
         result.append(item)
-    return result
+    return group_site_jobs(result)
+
+
+def api_project_archive(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id", ""))
+    security.require_project_role(project, request._identity(), "editor")
+    if type(data.get("archived")) is not bool:
+        raise ValueError("Archived must be true or false.")
+    update_project({"id": project["id"], "archived": data["archived"]})
+    return {"project_id": project["id"], "archived": data["archived"]}
 
 
 def api_project_members(request):
@@ -3946,11 +4189,13 @@ def main():
     global SERVER_HOST
     SERVER_HOST = args.host
     _register_stack_dump()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = ArchieHTTPServer((args.host, args.port), Handler)
     print(f"Open http://{args.host}:{args.port}")
     if os.environ.get("ARCHIE_RECOVER_HANDOFFS", "").lower() != "off" and os.environ.get("ARCHIE_ENV") != "test":
-        threading.Thread(target=calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],),
-                         daemon=True, name="archie-recover-handoffs").start()
+        # A few seconds' grace so the first page load after a restart isn't competing with the recovery check.
+        recover = threading.Timer(5.0, calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],))
+        recover.daemon, recover.name = True, "archie-recover-handoffs"
+        recover.start()
     server.serve_forever()
 
 

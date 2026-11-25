@@ -1,9 +1,11 @@
-import { getJson, sendJson, escapeHtml, fmt, navigate } from "./api.js";
+import { getJson, sendJson, escapeHtml, fmt, navigate, plainNote } from "./api.js";
+import { joinPanel, bindJoins } from "./joins.js";
 import { planSvg, lineLegend } from "./plan.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 const ESTIMATED_AREAS = new Set(["ai_outline", "remainder", "estimate"]);
 const ASSUMED_AREAS = new Set(["sheet_scale", "printed_dimensions"]);
+const NOT_COOLED_STATES = new Set(["not_cooled", "sized_separately", "left_out"]);
 
 function norm(value) {
   return String(value || "")
@@ -12,10 +14,16 @@ function norm(value) {
     .trim();
 }
 
+// A report row is this room's by the room list's identity (source_room_id) when it has one: the name alone can be
+// another level's room ("Storage" on the Basement and on the First Floor).
+function sameRoom(row, room) {
+  if (row.source_room_id) return row.source_room_id === room.room_id;
+  return row.room_id === room.room_id || norm(row.room_name) === norm(room.name);
+}
+
 function roomSurfaces(plan, room) {
-  return (plan.phase1_report?.phase1_surface_audit || []).filter(
-    (row) =>
-      row.room_id === room.room_id || norm(row.room_name) === norm(room.name),
+  return (plan.phase1_report?.phase1_surface_audit || []).filter((row) =>
+    sameRoom(row, room),
   );
 }
 
@@ -116,8 +124,8 @@ function roomState(room) {
   );
 }
 
-function roomRows(plan, selected) {
-  return (plan.rooms || [])
+function roomRows(rooms, selected) {
+  return rooms
     .map((room) => {
       const selectedClass = room.room_id === selected.room_id ? "selected" : "";
       const area = room.area_m2 == null ? "—" : `${fmt(room.area_m2)} m²`;
@@ -136,6 +144,52 @@ function roomRows(plan, selected) {
       </tr>`;
     })
     .join("");
+}
+
+function roomTable(rooms, selected) {
+  return `<div class="job-table-wrap"><table class="job-room-table">
+    <thead><tr><th scope="col">Room</th><th scope="col">Area</th><th scope="col">Building load</th><th scope="col">Status</th></tr></thead>
+    <tbody>${roomRows(rooms, selected)}</tbody>
+  </table></div>`;
+}
+
+function floorRoomLists(plan, selected, projectId) {
+  const rooms = plan.rooms || [];
+  const selectedLevel = selected.level || "Floor plan";
+  const byLevel = new Map();
+  for (const room of rooms) {
+    const level = room.level || "Floor plan";
+    if (!byLevel.has(level)) byLevel.set(level, []);
+    byLevel.get(level).push(room);
+  }
+  const levels = [selectedLevel, ...[...byLevel.keys()].filter((level) => level !== selectedLevel)];
+  const switcher = levels.length > 1 ? `<div class="job-floor-switch"><label for="job-floor-select">Floor</label><select id="job-floor-select" data-floor-switch aria-controls="job-floor-panels">${levels.map((level) => `<option value="${escapeHtml(level)}"${level === selectedLevel ? " selected" : ""}>${escapeHtml(level)}</option>`).join("")}</select></div>` : "";
+  const panels = levels.map((level) => {
+    const floorRooms = byLevel.get(level) || [];
+    const cooled = floorRooms.filter((room) => !NOT_COOLED_STATES.has(room.state));
+    const notCooled = floorRooms.filter((room) => NOT_COOLED_STATES.has(room.state));
+    const pages = (plan.pages || []).filter((page) => {
+      const outlines = (plan.outlines || []).filter((outline) => outline.page === page.page && outline.points?.length >= 3);
+      if (!outlines.length) return false;
+      const pageLevels = new Set([page.level_name].filter(Boolean));
+      outlines.forEach((outline) => {
+        if (outline.level) pageLevels.add(outline.level);
+        const match = rooms.find((room) => room.room_id === outline.room_id);
+        if (match) pageLevels.add(match.level || "Floor plan");
+      });
+      rooms.filter((room) => room.source_pages?.includes(page.page)).forEach((room) => pageLevels.add(room.level || "Floor plan"));
+      // A plan without a matching room floor remains reachable on every floor.
+      return pageLevels.has(level) || !levels.some((knownLevel) => pageLevels.has(knownLevel));
+    });
+    return `<div class="job-floor-rooms" data-floor-panel="${escapeHtml(level)}"${level === selectedLevel ? "" : " hidden"}>
+      ${planSvg({ ...plan, pages }, { selectedRoom: selected.room_id, onSelect: (id) => navigate(projectId, "rooms", id) })}
+      ${lineLegend()}
+      <h3>${level === selectedLevel ? "Rooms on this floor" : `Rooms on ${escapeHtml(level)}`}</h3>
+      ${cooled.length ? roomTable(cooled, selected) : ""}
+      ${notCooled.length ? `<details class="job-not-cooled"><summary>${notCooled.length} ${notCooled.length === 1 ? "room" : "rooms"} not cooled on this floor</summary>${roomTable(notCooled, selected)}</details>` : ""}
+    </div>`;
+  }).join("");
+  return `${switcher}<div id="job-floor-panels">${panels}</div>`;
 }
 
 function areaClass(room) {
@@ -191,7 +245,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
       <h2 id="room-detail-title">Change the ceiling height</h2>
       <form id="job-height-form">
         <label class="job-field"><span>Ceiling height in metres</span><input name="height" type="number" min="1.8" max="15" step="0.01" required value="${height?.ceiling_height_mm != null ? fmt(height.ceiling_height_mm / 1000, 2) : ""}"></label>
-        <button class="job-button" type="submit">Save and update Phase 1</button>
+        <button class="job-button" type="submit">Save and update the load</button>
         <p class="job-note" role="status" id="job-editor-message"></p>
       </form>
     </section>`;
@@ -236,7 +290,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
             <option value="not_exposed" ${envelope.roof === "not_exposed" ? "selected" : ""}>Floor or conditioned space above</option>
             <option value="exposed" ${envelope.roof === "exposed" ? "selected" : ""}>Exposed roof above</option>
           </select></label>
-          <button class="job-button" type="submit" ${trace.trace_id ? "" : "disabled"}>Save and update Phase 1</button>
+          <button class="job-button" type="submit" ${trace.trace_id ? "" : "disabled"}>Save and update the load</button>
           <p class="job-note" role="status" id="job-editor-message"></p>
         </form>`
           : `<p class="job-muted">No wall outline is available to edit for this room.</p>`
@@ -279,23 +333,23 @@ function roomDetails(plan, room, status, uses, editor = {}) {
     ? `<ul class="job-assumptions">${assumptions
         .map(
           (item) =>
-            `<li>${escapeHtml(item.reason || item.component || "Assumption recorded")} <button class="job-link-button" data-edit-envelope>Change</button></li>`,
+            `<li>${escapeHtml(plainNote(item.reason || item.component || "Assumption recorded"))} <button class="job-link-button" data-edit-envelope>Change</button></li>`,
         )
         .join("")}</ul>`
-    : `<p class="job-muted">No Phase 1 assumptions are recorded for this room.</p>`;
+    : `<p class="job-muted">No assumptions are recorded for this room’s building load.</p>`;
   const useEditor = room.kind !== "refrigeration" && room.kind !== "not_a_room" ? useOptions(uses, room) : "";
   const useReason = room.use?.rationale ? `<p class="job-caption" data-room-use-reason>${escapeHtml(room.use.rationale)} Confidence: ${escapeHtml(room.use.confidence_band || "not recorded")}.</p>` : "";
   const factors = room.use?.use_assessment?.factors || [];
   const useFactors = factors.length ? `<details><summary>Why this use was selected</summary><ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul></details>` : "";
   return `<section class="job-panel job-room-detail" aria-labelledby="room-detail-title">
     <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.display_name || room.name)}</h2>
-    <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room"))}</p>
+    <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Cooled room"))}</p>
     ${useReason}${useFactors}${useEditor}
     ${room.occupancy?.value != null ? `<p class="job-caption" data-room-occupancy><strong>Design occupants (operating loads): ${fmt(room.occupancy.value, 0)}</strong><br>${escapeHtml(room.occupancy.rationale || "Saved occupancy; source not recorded.")}</p>` : ""}
     <dl class="job-key-facts">
       <div><dt>Floor area</dt><dd class="${areaClass(room)}" title="${escapeHtml(areaLabel)}">${escapeHtml(areaValue)}</dd></div>
       <div><dt>Ceiling height</dt><dd class="${height?.origin === "preliminary_fallback" ? "assumed" : ""}" title="${escapeHtml(height?.origin || "Height source not recorded")}">${escapeHtml(heightValue)} <button class="job-link-button" data-edit-height>Change</button></dd></div>
-      <div><dt>Empty-room load</dt><dd>${room.phase1_kw == null ? "Not calculated yet" : `${fmt(room.phase1_kw)} kW`}</dd></div>
+      <div><dt>Building load</dt><dd>${room.phase1_kw == null ? "Not calculated yet" : `${fmt(room.phase1_kw)} kW`}</dd></div>
     </dl>
     <p class="job-caption">Area: ${escapeHtml(areaNote)} Height: ${escapeHtml(height?.origin === "preliminary_fallback" ? "Typical 2.7 m height" : height?.origin ? "Matched to drawing evidence" : "Height not available yet")}.</p>
     <h3>What the load is worked out from</h3>
@@ -328,7 +382,9 @@ function needsYou(plan, projectId) {
     })
     .join("");
   return `<section class="job-needs" aria-labelledby="needs-title">
-    <h2 id="needs-title">${rows.length} ${rows.length === 1 ? "thing needs" : "things need"} you</h2>
+    <h2 id="needs-title">${rows.every((room) => room.state === "needs_area")
+      ? `${rows.length} ${rows.length === 1 ? "room needs" : "rooms need"} an area`
+      : `${rows.length} ${rows.length === 1 ? "room needs" : "rooms need"} you`}</h2>
     <ul>${items}</ul>
   </section>`;
 }
@@ -353,30 +409,24 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
     : "";
   const left = `<section class="job-panel job-room-plan" aria-labelledby="floor-title">
     <div class="job-section-title"><h2 id="floor-title">${escapeHtml(level)}</h2>${pages ? `<span>${escapeHtml(pages)}</span>` : ""}</div>
-    ${planSvg(plan, { selectedRoom: room.room_id, onSelect: (id) => navigate(projectId, "rooms", id) })}
-    ${lineLegend()}
-    <h3>Rooms on this floor</h3>
-    <div class="job-table-wrap"><table class="job-room-table">
-      <thead><tr><th scope="col">Room</th><th scope="col">Area</th><th scope="col">Empty-room load</th><th scope="col">Phase 1</th></tr></thead>
-      <tbody>${roomRows(plan, room)}</tbody>
-    </table></div>
+    ${floorRoomLists(plan, room, projectId)}
   </section>`;
   const remaining = plan.phase1_report?.supervisor_exceptions || [];
   const exceptionPanel = remaining.length
-    ? `<section class="job-panel" data-model-exceptions><h2>Unresolved drawing checks</h2><p>The empty-room result covers the supported inputs. These checks remain unresolved.</p><ul>${remaining.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul></section>` : "";
-  const coverage = plan.phase1_report?.phase1_coverage || {};
-  const partialPanel = coverage.partial
-    ? `<section class="job-panel" data-phase1-partial><h2>${escapeHtml(coverage.partial_label || "Partial result")}</h2><p>The empty-room total below leaves this out.</p><ul>${(coverage.partial_reasons || []).map((text) => `<li>${escapeHtml(text)}</li>`).join("")}</ul></section>` : "";
+    ? `<section class="job-panel" data-model-exceptions><h2>Unresolved drawing checks</h2><p>The building load covers the supported inputs. These checks remain unresolved.</p><ul>${remaining.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul></section>` : "";
+  // Which cooled rooms aren't in the load, and why: filled from the job summary (summary.js fillCounts), the one count
+  // every screen shows. The saved building-load report's own list could lag the live rooms.
+  const partialPanel = `<section class="job-panel" data-uncounted data-phase1-partial aria-live="polite" hidden></section>`;
   const assumed = (plan.phase1_report?.supervisor_assumptions || []).map((row) => row.message);
   const assumptionPanel = assumed.length
-    ? `<section class="job-panel" data-result-assumptions><h2>Assumptions in this result</h2><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(text)}</li>`).join("")}</ul></section>` : "";
+    ? `<section class="job-panel job-collapsible-panel" data-result-assumptions><details><summary><h2>${assumed.length} ${assumed.length === 1 ? "assumption" : "assumptions"} in this result</h2></summary><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(plainNote(text))}</li>`).join("")}</ul></details></section>` : "";
   const notOnPlan = plan.rooms_not_on_plan || [];
   const notOnPlanPanel = notOnPlan.length
     ? `<section class="job-panel" data-rooms-not-on-plan><h2>Not counted as rooms</h2><ul>${notOnPlan.map((row) => `<li>${escapeHtml(row.reason)}</li>`).join("")}</ul></section>` : "";
   const right = roomDetails(plan, room, status, uses, editor);
   return {
     room,
-    content: `${needsYou(plan, projectId)}${exceptionPanel}${partialPanel}${assumptionPanel}${notOnPlanPanel}<div class="job-columns job-rooms-layout">${left}${right}</div>`,
+    content: `${needsYou(plan, projectId)}${joinPanel(plan)}${exceptionPanel}${partialPanel}${assumptionPanel}${notOnPlanPanel}<div class="job-columns job-rooms-layout">${left}${right}</div>`,
   };
 }
 
@@ -390,14 +440,14 @@ async function recalculate(projectId) {
   while (["running", "queued"].includes(job.status)) {
     if (Date.now() - started > 600000) {
       throw new Error(
-        "Phase 1 is still running. Return to the job to check its progress.",
+        "The building load is still being calculated. Return to the job to check its progress.",
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
     job = await getJson(`/api/job-calculation${query(projectId)}`);
   }
   if (job.status !== "done")
-    throw new Error(job.error || "The Phase 1 calculation did not finish.");
+    throw new Error(job.error || "The building load calculation did not finish.");
 }
 
 export async function renderRooms(project, projectId, roomId = "") {
@@ -427,22 +477,29 @@ export async function renderRooms(project, projectId, roomId = "") {
   let statusLine =
     "The AI is working through each room’s walls, roof and floor.";
   if (status.phase1_complete)
-    statusLine = "Phase 1 is complete for the rooms with resolved evidence.";
+    statusLine = "The building load is calculated for every room the drawings resolved.";
   else if (areaCount)
     statusLine = `The AI is working out the area of ${areaCount} ${areaCount === 1 ? "room" : "rooms"}.`;
   else if (needsCount)
-    statusLine = `${needsCount} ${needsCount === 1 ? "room needs" : "rooms need"} an area or a use before Phase 1 can finish.`;
+    statusLine = `${needsCount} ${needsCount === 1 ? "room needs" : "rooms need"} an area or a use before the building load can finish.`;
   else if (surfaceCount)
     statusLine = `The AI is working out the boundaries of ${surfaceCount} ${surfaceCount === 1 ? "room" : "rooms"}.`;
   return {
     content: layout.content,
     status,
     statusLine,
-    bind: () => bindRoomActions(projectId, layout.room, plan, status, uses),
+    bind: () => {
+      bindRoomActions(projectId, layout.room, plan, status, uses);
+      bindJoins(projectId, () => window.dispatchEvent(new HashChangeEvent("hashchange")));
+    },
   };
 }
 
 function bindRoomActions(projectId, room, plan, status, uses) {
+  document.querySelector("[data-floor-switch]")?.addEventListener("change", (event) => {
+    const first = (plan.rooms || []).find((item) => (item.level || "Floor plan") === event.currentTarget.value);
+    if (first) navigate(projectId, "rooms", first.room_id);
+  });
   document.querySelectorAll("[data-room]").forEach((button) => {
     if (button.dataset.bound) return;
     button.dataset.bound = "1";
