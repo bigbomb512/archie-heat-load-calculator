@@ -34,6 +34,8 @@ method gate plus complete cited surface/source records.
 
 ## Run locally
 
+Use Python 3.12 or newer; the pinned NumPy release requires it.
+
 ```bash
 git clone https://github.com/bigbomb512/archie-heat-load-calculator.git
 cd archie-heat-load-calculator
@@ -58,7 +60,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 tests/test_repository_hygiene.py
 
 For every meaningful code change, the mandatory developer smoke gate runs the
 same checks plus the independent calculation sanity vectors, regression scripts,
-frontend syntax/contract checks, and a Git whitespace check:
+frontend syntax and theme checks, and a Git whitespace check:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 tools/mandatory_smoke_gate.py

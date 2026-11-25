@@ -3861,7 +3861,7 @@ def start_phase1_after_review(web, project, run_id):
             or manifest.get("status") not in PHASE1_AFTER_REVIEW):
         return None
     try:
-        from backend import ai_preliminary_service, calculation_service
+        from backend import calculation_service
         current = web.project_by_id(project["id"]) if hasattr(web, "project_by_id") else project
         return calculation_service.maybe_start_phase1(web, current)
     except Exception:

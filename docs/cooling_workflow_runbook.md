@@ -185,9 +185,10 @@ error.
 
 ```bash
 for test in tests/test_*.py; do
-  [ "$test" = "tests/test_frontend_contract.py" ] || PYTHONPATH=. python3 "$test" || exit 1
+  PYTHONPATH=. python3 "$test" || exit 1
 done
-PYTHONPATH=. python3 tests/test_frontend_contract.py
+node --check frontend/js/job/app.js
+node --test frontend/tests/landing-theme.test.cjs
 ```
 
 The frontend browser checks are run from `frontend/` with the repository's

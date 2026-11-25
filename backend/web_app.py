@@ -5,7 +5,6 @@ import base64
 from copy import deepcopy
 import hashlib
 import ipaddress
-import mimetypes
 import os
 import sys
 import html
@@ -94,7 +93,7 @@ from backend import draft_service
 from backend import calculation_extraction_service
 from backend import (drawing_tasks_service, room_use_resolution_service, room_inference_service,
     reviewer_room_geometry_service, ai_preliminary_service, au_ventilation_rules_service, job_service,
-    page_preparation_service, calculation_service, page_inventory_service, page_extraction_service, ai_provider,
+    calculation_service, page_inventory_service, page_extraction_service, ai_provider,
     result_status_service)
 from backend import productization, skill_workflow_service
 from backend import security
@@ -145,6 +144,14 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_PDF_BYTES = 250 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 PUBLIC_ASSET_SUFFIXES = {".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".woff", ".woff2", ".ttf", ".ico", ".html"}
+ARTIFACT_CONTENT_TYPES = {
+    ".pdf": "application/pdf", ".html": "text/html; charset=utf-8",
+    ".json": "application/json", ".jsonl": "application/x-ndjson",
+    ".zip": "application/zip", ".csv": "text/csv; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8", ".png": "image/png",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml",
+    ".webp": "image/webp", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 
 class CalculatorInputConflict(Exception):
@@ -677,21 +684,27 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError("Artifact reference is incomplete.")
         project = project_by_id(project_id)
         identity = self._identity()
+        review_base = WEB_REVIEW.resolve()
         root = Path(project.get("review_dir", "")).resolve()
-        if not root.is_dir() or not artifact or "\x00" in artifact:
+        if project_id != Path(project_id).name or root != review_base / project_id or not root.is_dir():
             raise ValueError("Artifact is unavailable.")
+        # Only a relative path made of ordinary components may be resolved.
+        # This also keeps control characters out of filesystem names and responses.
+        if ("\\" in artifact or any(ord(char) < 32 or ord(char) == 127 for char in artifact)
+                or any(part in {"", ".", ".."} for part in artifact.split("/"))):
+            raise security.SecurityError("Artifact path rejected.")
         candidate = (root / artifact).resolve()
         try:
             candidate.relative_to(root)
         except ValueError as error:
             raise security.SecurityError("Artifact path rejected.") from error
-        if not candidate.is_file():
-            raise ValueError("Artifact is unavailable.")
         # Viewers may use immutable report packages only. Raw evidence and PDFs
         # remain editor-only even when their artifact identifier is known.
         is_package = "report_packages" in candidate.relative_to(root).parts
         security.require_project_role(project, identity, "viewer" if is_package else "editor")
-        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        if not candidate.is_file():
+            raise ValueError("Artifact is unavailable.")
+        content_type = ARTIFACT_CONTENT_TYPES.get(candidate.suffix.lower(), "application/octet-stream")
         self.send_file(candidate, content_type)
 
     def send_html(self, body, status=200):

@@ -48,8 +48,6 @@ def run_check(label: str, command: list[str]) -> None:
 def python_regression_commands(include_video: bool) -> list[tuple[str, list[str]]]:
     commands: list[tuple[str, list[str]]] = []
     for path in sorted(TEST_DIR.glob("test_*.py")):
-        if path.name == "test_frontend_contract.py":
-            continue
         if path.name == "test_video_serving.py" and not include_video:
             continue
         commands.append((f"Python regression: {path.name}", [sys.executable, str(path)]))
@@ -84,16 +82,20 @@ def main() -> int:
         ("Git whitespace check", ["git", "diff", "--check"]),
         ("Staged Git whitespace check", ["git", "diff", "--cached", "--check"]),
         (
-            "Frontend contract",
-            [sys.executable, str(TEST_DIR / "test_frontend_contract.py")],
-        ),
-        (
             "Frontend app syntax",
-            ["node", "--check", str(ROOT / "frontend" / "js" / "app.js")],
+            ["node", "--check", str(ROOT / "frontend" / "js" / "job" / "app.js")],
         ),
         (
             "Frontend landing syntax",
             ["node", "--check", str(ROOT / "frontend" / "js" / "landing.js")],
+        ),
+        (
+            "Frontend theme syntax",
+            ["node", "--check", str(ROOT / "frontend" / "js" / "landing-theme.js")],
+        ),
+        (
+            "Frontend theme tests",
+            ["node", "--test", str(ROOT / "frontend" / "tests" / "landing-theme.test.cjs")],
         ),
     ]
     checks.extend(python_regression_commands(args.include_video))
