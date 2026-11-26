@@ -1,11 +1,11 @@
 # Archie frontend conventions
 
-Use `css/design-system.css` for shared tokens and controls. The palette has one primary blue, one ink colour, one muted text colour, white, a canvas colour, a border and a wash. Status colours are reserved for warnings, errors and readiness.
+Use `css/design-system.css` for shared tokens and controls. The palette has one primary blue (steel blue `#246b91`), a neutral near-black ink (`#1f2328`, not navy), neutral muted greys (`#4f5862`, `#59636e`), white, a light grey canvas (`#f6f8fa`), a neutral border (`#d1d9e0`) and a pale blue wash. Chart series that used navy use graphite `#3d4650`. (Chosen 26 Nov 2026: the blue kept, the dark navy text dropped.) Status colours are reserved for warnings, errors and readiness.
 
-- Body: Alte Haas Grotesk. Monospace is reserved for drawing labels and engineering data.
+- Body: Manrope (variable, 200–800, `assets/fonts/Manrope-Variable.ttf`, SIL Open Font License). Monospace is reserved for drawing labels and engineering data.
 - UI text: 12 / 14 / 16px. Small headings: 20 / 24 / 32px. The landing page heading remains responsive.
 - Spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64px.
-- Corners: 6px controls, 10px panels. Circular identity marks and photographic composition are intentional exceptions.
+- Corners: 6px controls and panels. Circular identity marks and photographic composition are intentional exceptions.
 - Buttons: primary and secondary, 44px minimum. Dense secondary controls may use the 36px mini variant.
 - Shadows: reserve the shared shadow for transient messages. Forms and panels use borders.
 - Numeric results: tabular figures, with units retained in visible labels.

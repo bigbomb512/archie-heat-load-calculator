@@ -3,8 +3,8 @@ import { planSvg } from "./plan.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 const LOAD_PARTS = {
-  outside_air: { label: "Fresh air", color: "#163B50" },
-  infiltration: { label: "Air leakage", color: "#163B50" },
+  outside_air: { label: "Fresh air", color: "#3d4650" },
+  infiltration: { label: "Air leakage", color: "#3d4650" },
   people: { label: "People", color: "#246B91" },
   lighting: { label: "Lights", color: "#6FA3C2" },
   equipment_refrigeration: { label: "Equipment", color: "#B9D3E2" },
@@ -72,7 +72,7 @@ function bar(components, roomLoadValue, maxLoad, historical = false) {
   const pieces = entries
     .map(([key, value]) => {
       const part = LOAD_PARTS[key] || { label: key, color: "#86B3CE" };
-      const border = part.outline ? "border:1px solid #163B50;" : "";
+      const border = part.outline ? "border:1px solid #3d4650;" : "";
       const outdated = historical ? " (out of date)" : "";
       return `<i title="${escapeHtml(part.label)}: ${fmt(value)} kW${outdated}" style="width:${Math.max(0, (value / maxLoad) * 100)}%;background:${part.color};${border}"></i>`;
     })
@@ -115,7 +115,7 @@ const hourLabel = (hour) => `${String(hour).padStart(2, "0")}:00`;
 
 // Chart colours: the design system's blues, dark to light, the two lightest outlined (DESIGN.md: one primary blue).
 const DAY_GROUP_STYLE = {
-  air: { color: "#163B50" },
+  air: { color: "#3d4650" },
   people: { color: "#246B91" },
   sun: { color: "#4F8DB3" },
   lights: { color: "#7FAECB" },
@@ -168,11 +168,11 @@ function hourlyChartSvg({ hours, labels, peakHour, peakKw, title, compact = fals
       else down = to;
       const yA = y(Math.max(from, to));
       const h = Math.max(Math.abs(y(from) - y(to)) - 0.5, 0.5);
-      parts.push(`<rect x="${x.toFixed(1)}" y="${yA.toFixed(1)}" width="${(barW - 3).toFixed(1)}" height="${h.toFixed(1)}" fill="${style.color}"${style.outline ? ' stroke="#163B50" stroke-width="0.75"' : ""}><title>${hourLabel(hour)} ${escapeHtml(label)}: ${fmt(value)} kW</title></rect>`);
+      parts.push(`<rect x="${x.toFixed(1)}" y="${yA.toFixed(1)}" width="${(barW - 3).toFixed(1)}" height="${h.toFixed(1)}" fill="${style.color}"${style.outline ? ' stroke="#3d4650" stroke-width="0.75"' : ""}><title>${hourLabel(hour)} ${escapeHtml(label)}: ${fmt(value)} kW</title></rect>`);
     }
     if (!labels.length || !Object.keys(row.groups || {}).length) {
       const yA = y(Math.max(0, row.total));
-      parts.push(`<rect x="${x.toFixed(1)}" y="${yA.toFixed(1)}" width="${(barW - 3).toFixed(1)}" height="${Math.max(Math.abs(y(0) - y(row.total)), 0.5).toFixed(1)}" fill="${hour === peakHour ? "#163B50" : "#86B3CE"}"><title>${hourLabel(hour)}: ${fmt(row.total)} kW</title></rect>`);
+      parts.push(`<rect x="${x.toFixed(1)}" y="${yA.toFixed(1)}" width="${(barW - 3).toFixed(1)}" height="${Math.max(Math.abs(y(0) - y(row.total)), 0.5).toFixed(1)}" fill="${hour === peakHour ? "#3d4650" : "#86B3CE"}"><title>${hourLabel(hour)}: ${fmt(row.total)} kW</title></rect>`);
     }
     if (hour % 3 === 0) {
       parts.push(`<text x="${(x + (barW - 3) / 2).toFixed(1)}" y="${height - bottom + 15}" class="axis" text-anchor="middle">${String(hour).padStart(2, "0")}</text>`);
