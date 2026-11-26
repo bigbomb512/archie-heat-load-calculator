@@ -33,8 +33,20 @@ OpenRouter (`OPENROUTER_API_KEY`), model `anthropic/claude-haiku-5.5` for drawin
 - There's no Garage on either floor plan; the AI correctly reports that. Run 4's Dining outline (51.9 m²) overlaps its neighbour and needs splitting.
 - The full job copies were in the session's scratchpad, which may be gone. Rerun the script to recreate them.
 
+## Update (later on 26 Nov, second account)
+- **Windows on walls (fixed):** the retrace script now does the app's room-use refresh before window placement (`_refresh_room_use`: export, room-use resolve, evidence build). Without it, new outlines had no room-use record and were skipped as not cooled.
+- **App fix in `backend/room_proposal.py`:** an outline whose saved numbering is out of date ("Living" after "Living (1)/(2)/(3)") was dropped from the room list, so it never got a cooled record. Current outlines now replace old numbered entries that no longer have an outline, and each outline is added under its own `room_id`.
+- **App fix in `ai/room_use_resolution.py`:** "Sitting" now counts as a house living room. Before, it was a low-confidence generic room counted as not cooled.
+- **Retrace script:** the asked-name list is fixed after a page's first answer (it used to flip forever), and letter-spaced labels ("R O B E") are merged. All three new runs finished on their own.
+- **Three new runs** (a, b, c; 41–48 calls each; about $0.14 together; key has about $2.67 left): ground floor 14–15 outlines with 4 names unmatched, first floor 18–23 outlines, 12–14 windows placed on walls (saved job: 0). Run c is the best and is saved in `tmp/room_retrace_2026-11-26/run_c/`.
+- **Visual review of run c (not approved):** most rooms are in the right place, but some are wrong:
+  - Wrong names: the ground-floor Sitting room is labelled "Living (1)", Media is "Family", and Bedroom 5 is "Bedroom".
+  - Wrong shapes: Dining (37.8 m²) and Kitchen are skewed shapes that don't follow the walls. "Alfresco" is a 1.3 m² sliver. WIR and Linen have no outline.
+  - First floor: "Balcony shown" (59 m²) covers roof and outdoor space, "Balcony" (13.8 m²) sticks out past the building, and Linen overlaps its neighbour.
+- Full suite: 1,663 tests, OK.
+
 ## Next steps
-1. Find out why run 4 places no windows on walls. 16 windows fail with "no outside wall within 3000 mm of the tag". Suspected cause: `retrace_job_copy.py` patches out `_p3_packets` and `_p3_surroundings_packets`, the steps that mark walls as outside or shared, and the tenancy outline may differ between runs. Check with no AI calls first.
+1. (Done, see Update.) Find out why run 4 places no windows on walls. 16 windows fail with "no outside wall within 3000 mm of the tag". Suspected cause: `retrace_job_copy.py` patches out `_p3_packets` and `_p3_surroundings_packets`, the steps that mark walls as outside or shared, and the tenancy outline may differ between runs. Check with no AI calls first.
 2. Results vary a lot between runs. Run Turramurra about three times and keep each room's outline that best follows the walls, or make the corner-snap step more consistent.
 3. Show the user the overlays and counts for every house, including any that get worse, and get approval before changing a saved job or recalculating. Turramurra's saved 9.81 kW is probably too low.
 4. Then decide about the other 11 houses (the review flags 156 printed names with no outline across all 12).

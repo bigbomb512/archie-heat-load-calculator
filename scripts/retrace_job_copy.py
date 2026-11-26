@@ -150,6 +150,16 @@ def _build(web, project):
         tasks.run_all(web, project)
 
 
+def _refresh_room_use(web, project, root):
+    """What the app does after drawing answers: export them, re-resolve each room's use, rebuild the evidence. Window
+    placement only hosts windows on rooms resolved as cooled, so new traces without this get none (run 4, 26 Nov:
+    29 of 32 traces had no room-use record and 0 windows were placed; 12 after this). No AI call."""
+    from backend import calculation_extraction_service, room_use_resolution_service
+    tasks._export_determinations(root)
+    room_use_resolution_service.post(web, project, {"action": "resolve"})
+    calculation_extraction_service.post(web, project, {"action": "build"})
+
+
 def _waiting(root):
     return [row for row in drawing._waiting(root) if row.get("task") in P0_TASKS]
 
@@ -249,6 +259,7 @@ def run(job, out, *, live=False, max_calls=60):
         if live:
             _answer(web, project, max_calls, report)
             if not report.get("stopped_reason"):
+                _refresh_room_use(web, project, out)
                 report["window_placement"] = house_windows_service.apply(web, project, out)
         report["room_outcomes"] = _outcomes(out)
         report["eval_room_tracing"] = eval_room_tracing.evaluate(out)

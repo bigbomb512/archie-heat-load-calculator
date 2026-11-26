@@ -49,6 +49,33 @@ def main():
 
 
 class UseEvidenceServiceTests(unittest.TestCase):
+    def test_current_plain_trace_replaces_stale_numbered_room_uses(self):
+        from backend import room_proposal
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            web = LocalWeb()
+            project = {"id": "renamed-outline", "review_dir": str(root)}
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {"8": {"title": "Ground Floor House Plan"}}}))
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"name": "Living", "level_name": "Ground Floor"}]}))
+            (root / "ai_preliminary_run.json").write_text(json.dumps({"local_room_inference_proposal": {"rooms": [
+                {"kind": "room", "label": "Living", "level_name": "Ground Floor"}]}}))
+            room_proposal.save_numbered_rooms(root, "P0_numbered_repeat:saved_outlines", 8, "Ground Floor",
+                                             [(f"Living ({number})", "Living") for number in (1, 2, 3)], "old")
+            with patch.object(room_use_resolution_service, "gather_use_evidence", return_value={}):
+                old = room_use_resolution_service.post(web, project, {"action": "resolve"})
+                self.assertEqual({row["room_id"] for row in old["room_use_resolution"]["records"]},
+                                 {f"room-use:ground-floor:living-{number}" for number in (1, 2, 3)})
+                trace = {"room_id": "room-use:ground-floor:living", "room_label": "Living",
+                         "level_name": "Ground Floor", "page": 8}
+                new_trace = {"room_id": "room-use:ground-floor:family", "room_label": "Family",
+                             "level_name": "Ground Floor", "page": 8}
+                with patch.object(room_proposal, "traced_rooms", return_value=[trace, new_trace]):
+                    current = room_use_resolution_service.post(web, project, {"action": "resolve"})
+            records = current["room_use_resolution"]["records"]
+            self.assertEqual({row["room_id"] for row in records}, {trace["room_id"], new_trace["room_id"]})
+            self.assertTrue(all(row["space_scope"] == "comfort_hvac" for row in records))
+
     def test_physical_text_and_crop_are_assigned_to_outline_not_room_name(self):
         from backend import equipment_catalogue_service as equipment, autonomous_tasks_service as tasks
         with TemporaryDirectory() as directory:
