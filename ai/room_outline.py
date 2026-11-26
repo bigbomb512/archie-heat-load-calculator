@@ -1516,6 +1516,58 @@ def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8)
     return min(1.0, covered / length)
 
 
+def outline_wall_review(points, segments, mm_per_px, open_sides=""):
+    """Flag Turramurra-style slanted Dining/Kitchen edges when expected walls are absent.
+
+    The reply may identify open plan sides by compass direction; those sides are excluded.
+    With too little wall evidence to judge a room, leave it for the other checks.
+    """
+    # Door openings dominate small rooms, so two unwalled edges there are weak evidence.
+    if not segments or not mm_per_px or len(points) < 3 or Polygon(points).area * mm_per_px ** 2 < 8_000_000:
+        return ""
+    wording = str(open_sides).casefold()
+    if re.search(r"\ball sides\b[^.;]*\b(open|no wall)\b", wording):
+        return ""
+    bounds = Polygon(points).bounds
+    edges = list(zip(points, [*points[1:], points[0]]))
+    measured = []
+    for start, end in edges:
+        length = math.dist(start, end)
+        if length * mm_per_px < 800:
+            continue
+        mx, my = (start[0] + end[0]) / 2, (start[1] + end[1]) / 2
+        distances = {"west": abs(mx - bounds[0]), "east": abs(mx - bounds[2]),
+                     "north": abs(my - bounds[1]), "south": abs(my - bounds[3])}
+        side = min(distances, key=distances.get)
+        side_word = {"west": "(?:west|left)", "east": "(?:east|right)",
+                     "north": "(?:north|top)", "south": "(?:south|bottom)"}[side]
+        if re.search(r"\b" + side_word + r"\s+(?:side|edge)\b[^.;]*\b(open|no wall|joinery|counter|floor.finish|balcony edge|tenancy line)\b", wording):
+            continue
+        # The broad 400 mm / 8 degree snap allowance can make a trapezoid look walled.
+        measured.append((length, wall_coverage((start, end), segments, mm_per_px,
+                                               max_offset_mm=150, max_angle_deg=3)))
+    if len(measured) < 2:
+        return ""
+    total = sum(length for length, _ in measured)
+    covered = sum(length * share for length, share in measured) / total
+    poor = sum(share < 0.35 for _, share in measured)
+    if (covered < 0.35 and sum(share >= 0.5 for _, share in measured) < 2) or (poor >= 2 and poor >= len(measured) / 2):
+        return f"Outline edges follow only {covered:.0%} of nearby drawn walls; review the room boundary."
+    return ""
+
+
+def outline_printed_label(points, room, labels, page_names):
+    """Resolve Turramurra's Media/Family and Bedroom/Bedroom 5 swaps from labels inside the floor."""
+    polygon = Polygon(points)
+    inside = {name for name, point in labels if polygon.contains(Point(point))}
+    if not inside or room.casefold() in {name.casefold() for name in inside}:
+        return room, ""
+    printed_on_page = {str(name).casefold() for name in page_names}
+    if len(inside) == 1 and room.casefold() not in printed_on_page:
+        return next(iter(inside)), ""
+    return room, f"Outline for {room} contains printed label(s) {', '.join(sorted(inside))}, but not its own; review the room name."
+
+
 REPEATED_OUTLINE_OVERLAP = 0.5
 
 
