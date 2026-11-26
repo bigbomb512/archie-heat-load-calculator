@@ -3866,7 +3866,8 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     trace_kwargs = {"defer": True} if defer else {}
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
         record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]],
-        replace_room_labels=[*record["packet"].get("room_names", []), *use_named, *{row.get("room_label") for row in rows if row.get("room_label")}], **trace_kwargs)
+        replace_room_labels=[*{row["room"] for row in validated},
+                             *{row.get("room_label") for row in rows if row.get("room_label")}], **trace_kwargs)
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"]},
         "validation":validated,"block_reason":""})
@@ -5020,7 +5021,8 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             validated = autonomous_tasks.validate_p0_room_names(record["packet"], reply)
             record = _apply_p0_room_names(web, project, root, record, validated, defer=defer)
         elif task == "P0_room_outlines":
-            validated = autonomous_tasks.validate_p0_outlines(record["packet"], reply)
+            diagnostics = {}
+            validated = autonomous_tasks.validate_p0_outlines(record["packet"], reply, diagnostics)
             omitted, not_drawn = room_outline.outline_omissions(autonomous_tasks.parse_json_reply(reply),
                                                                 record["packet"]["room_names"], validated)
             if omitted and len(record.get("reply_attempts") or []) < OUTLINE_ATTEMPTS_BEFORE_PARTIAL:
@@ -5029,8 +5031,12 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
                                  "not_drawn with the reason.")
             record = (_apply_p0_outlines(web, project, root, record, validated, defer=True) if defer
                       else _apply_p0_outlines(web, project, root, record, validated))
-            record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
-                                                    + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
+            failures = {row["room"].casefold(): row for row in diagnostics["not_drawn"]}
+            record["applied_value"]["not_drawn"] = ([failures.get(name.casefold(), {"room": name, "reason": "The AI left it out."})
+                                                    for name in omitted]
+                                                    + [failures.get(name.casefold(), {"room": name, "reason": reason})
+                                                       for name, reason in not_drawn.items()])
+            record["applied_value"]["extra_rooms"] = diagnostics["extra_rooms"]
         elif task == "P0_outline_corners":
             validated = autonomous_tasks.validate_p0_outline_corners(record["packet"], reply)
             record = _apply_p0_outline_corners(web, project, root, record, validated, defer=defer)

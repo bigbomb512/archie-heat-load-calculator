@@ -249,10 +249,11 @@ def validate_p0_unnamed_space(packet, reply):
     return room_outline.validate_unnamed_space_reply(parse_json_reply(reply), packet["traced_names"], packet["transform"], dwelling=packet.get("dwelling") is True)
 
 
-def validate_p0_outlines(packet, reply):
+def validate_p0_outlines(packet, reply, diagnostics=None):
     value = parse_json_reply(reply)
     return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"],
-        dwelling=packet.get("dwelling") is True, on_page_text=packet.get("on_page_text", ()), page=packet.get("page"))
+        dwelling=packet.get("dwelling") is True, on_page_text=packet.get("on_page_text", ()), page=packet.get("page"),
+        diagnostics=diagnostics)
 
 
 ROOM_SIZE_BASES = {"printed_area", "printed_dimensions", "estimated"}

@@ -1519,22 +1519,36 @@ def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8)
 REPEATED_OUTLINE_OVERLAP = 0.5
 
 
-def validate_outline_reply(reply, room_names, transform, dwelling=False, on_page_text=(), page=None):
+def validate_outline_reply(reply, room_names, transform, dwelling=False, on_page_text=(), page=None,
+                           diagnostics=None):
     """The drawn outlines, for the listed rooms and for spaces no listed name covers, named by their use
-    (USE_ROOM_NAMES)."""
+    (USE_ROOM_NAMES). Each room is checked on its own: one unusable outline or unlisted name is reported in
+    `diagnostics` (not_drawn / extra_rooms) instead of refusing the rooms drawn well (Turramurra, 2026-11-26)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("rooms"), list):
         raise ValueError("Outline reply must contain a rooms list.")
+    # A space no printed name covers may still be named by its use (USE_ROOM_NAMES), or by a name printed on this page.
     allowed = {name.casefold(): name for name in _room_names_for_context(dwelling)}
     allowed.update({name.casefold(): name for name in room_names})
+    notes = diagnostics if diagnostics is not None else {}
+    notes.setdefault("not_drawn", [])
+    notes.setdefault("extra_rooms", [])
     outlines, drawn = [], {}
     for row in reply["rooms"]:
-        room = str((row or {}).get("room", "")).strip()
+        if not isinstance(row, dict):
+            raise ValueError("Each outline room must be an object.")
+        room = str(row.get("room", "")).strip()
         if _allow_page_room(room, row, allowed, on_page_text, page) is None:
-            raise ValueError(f"Outline reply uses a room name that is not in the room list: {room!r}.")
-        points = row.get("points_px")
-        if not isinstance(points, list) or len(points) < 3:
-            raise ValueError(f"The outline for {room} needs at least three corner points.")
-        parts, repaired = outline_parts([_to_page(point, transform) for point in points], room)
+            # Not applied, but kept for the reviewer: one unlisted name used to throw away every other room on the page.
+            notes["extra_rooms"].append({"room": room, "reason": "Not in the room list, not a use name and not printed on this page."})
+            continue
+        try:
+            points = row.get("points_px")
+            if not isinstance(points, list) or len(points) < 3:
+                raise ValueError(f"The outline for {room} needs at least three corner points.")
+            parts, repaired = outline_parts([_to_page(point, transform) for point in points], room)
+        except (ValueError, TypeError, KeyError, IndexError, GEOSException) as error:
+            notes["not_drawn"].append({"room": allowed[room.casefold()], "reason": str(error)})
+            continue
         for part in parts:
             # A name given again is another part of that room ("Bedrooms" over four bedrooms, set 15 2026-11-07, where
             # refusing it lost the whole ground floor); the same outline given again is dropped.
@@ -1545,6 +1559,11 @@ def validate_outline_reply(reply, room_names, transform, dwelling=False, on_page
             earlier.append(polygon)
             outlines.append({"room": allowed[room.casefold()], "points": part, "open_sides": str(row.get("open_sides", ""))[:300],
                              **({"repaired": True} if repaired else {})})
+    if not outlines:
+        detail = notes["not_drawn"][0]["reason"] if notes["not_drawn"] else "No listed room has a valid outline."
+        raise ValueError(f"Outline reply has no usable rooms. {detail}")
+    drawn_names = {row["room"].casefold() for row in outlines}
+    notes["not_drawn"] = [row for row in notes["not_drawn"] if row["room"].casefold() not in drawn_names]
     return outlines
 
 

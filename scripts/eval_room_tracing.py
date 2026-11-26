@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend import autonomous_tasks_service as tasks, house_windows_service, reviewer_room_geometry_service
 from ai import room_inference
+from ai.room_outline import OPEN_FLOOR_MAX_M2
 
 
 DEFAULT_ROOT = Path('/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review')
@@ -90,7 +91,7 @@ def evaluate(root):
                            'name_mismatch': bool(inside) and all(
                                _base(labels[index]['name']) != _base(record.get('room_label'))
                                for index in inside),
-                           'implausible_area': area is not None and (area < 2 or area > 120)})
+                           'implausible_area': area is not None and (area < 2 or area > OPEN_FLOOR_MAX_M2)})
         covered = {index for record in records if record.get('page') == page
                    and len(record.get('points_image_px') or []) >= 3
                    for index, item in enumerate(labels)
