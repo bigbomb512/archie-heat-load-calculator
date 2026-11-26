@@ -45,6 +45,14 @@ OpenRouter (`OPENROUTER_API_KEY`), model `anthropic/claude-haiku-5.5` for drawin
   - First floor: "Balcony shown" (59 m²) covers roof and outdoor space, "Balcony" (13.8 m²) sticks out past the building, and Linen overlaps its neighbour.
 - Full suite: 1,663 tests, OK.
 
+## Hand-corrected Turramurra copy (26 Nov, provisional)
+- Built by `tmp/room_retrace_2026-11-26/hand_fixed/compose_fix.py` (not committed; it needs the scratchpad run copies). Each room uses the best AI outline from runs 4, b and c, checked against the plan. Kitchen (20.2 m²) and Dining (43.5 m²) are rectangles drawn from the neighbouring rooms' walls. Every outline's floor is set from its page (some AI rows had another floor's name). Dropped: the roof-sized "Balcony shown", the outside "Corridor" by the pool steps, the Alfresco slivers, and the first-floor Linen.
+- 17 windows are placed on the right rooms.
+- The room list was confirmed on the copy only, by "Claude (retrace copy, provisional)". Included: the 17 traced cooled rooms, 296 m². Excluded: "Driveway" (986 m²) and "Timber Fence" (291 m²), which come from old PDF evidence (the known site-works bug), the basement storage, and stale entries with no outline.
+- **Result: 14.48 kW** at 5 pm (49 W/m²), against the saved job's 9.81 kW. Breakdown: glazing solar 5.95, glazing conduction 1.76, solar on walls and roof 1.67, equipment 1.62, envelope 1.03, lighting 0.77, infiltration 0.70, people 0.55, fan 0.44.
+- Not done: applying this to the saved job, which needs the user's approval and their own room-list confirmation in the app; engineer review of the method; and the other 11 houses.
+- Separate issue found: old "Driveway" and "Timber Fence" entries still appear as cooled candidates on this job's room list. Check whether the saved job includes them.
+
 ## Next steps
 1. (Done, see Update.) Find out why run 4 places no windows on walls. 16 windows fail with "no outside wall within 3000 mm of the tag". Suspected cause: `retrace_job_copy.py` patches out `_p3_packets` and `_p3_surroundings_packets`, the steps that mark walls as outside or shared, and the tenancy outline may differ between runs. Check with no AI calls first.
 2. Results vary a lot between runs. Run Turramurra about three times and keep each room's outline that best follows the walls, or make the corner-snap step more consistent.
