@@ -53,6 +53,13 @@ OpenRouter (`OPENROUTER_API_KEY`), model `anthropic/claude-haiku-5.5` for drawin
 - Not done: applying this to the saved job, which needs the user's approval and their own room-list confirmation in the app; engineer review of the method; and the other 11 houses.
 - Separate issue found: old "Driveway" and "Timber Fence" entries still appear as cooled candidates on this job's room list. Check whether the saved job includes them.
 
+## Done at the end of 26 Nov
+- PR #23 (this branch) and PR #24 (`feat/stricter-outline-checks`, stacked on #23: cross-floor, off-wall and name-swap checks) are open. The user merges them.
+- The corrected outlines are applied to the saved Turramurra job (backup: `output/backups/turramurra-1794567651-before-retrace-2026-11-26`). Windows placed: 17, and the inputs are reassembled. **The user must confirm the room list in the app** to recalculate (expect about 14.5 kW). The app should run from this branch or from main after #23 merges.
+- The other 11 saved houses won't be retraced (user decision).
+- Dependabot: #14 and #18 were closed as superseded. Rebases were requested on #5, #6, #7, #11, #13, #15 and #16. #21 (Playwright) passes CI.
+- Unmerged worktree branches still need a decision. `set17-continue` (drops Driveway/fence labels from calculation zones) and `fix/house-room-checks` are relevant to these findings.
+
 ## Next steps
 1. (Done, see Update.) Find out why run 4 places no windows on walls. 16 windows fail with "no outside wall within 3000 mm of the tag". Suspected cause: `retrace_job_copy.py` patches out `_p3_packets` and `_p3_surroundings_packets`, the steps that mark walls as outside or shared, and the tenancy outline may differ between runs. Check with no AI calls first.
 2. Results vary a lot between runs. Run Turramurra about three times and keep each room's outline that best follows the walls, or make the corner-snap step more consistent.
