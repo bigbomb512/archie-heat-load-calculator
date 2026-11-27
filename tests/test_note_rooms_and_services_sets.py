@@ -170,6 +170,16 @@ class BuildingSpacesTests(unittest.TestCase):
         self.assertEqual(sorted(row["name"] for row in kept), ["Bedroom", "Living"])
         self.assertEqual(aside, [junk])
 
+    def test_site_and_landscape_labels_are_always_set_aside(self):
+        # Set 17 (2026-11-15): the saved spaces kept "Driveway", "Site" and "Timber Fence BDY m" with no page, so the
+        # off-main-plan rule didn't catch them and the calculation listed them as rooms.
+        driveway, site, fence = (self.space(name, "") for name in ("Driveway", "Site", "Timber Fence BDY m"))
+        kitchen = self.space("Kitchen", "Ground Floor", 8)
+        kept, aside = self.reconcile([driveway, site, kitchen, fence])
+        self.assertEqual(([row["name"] for row in kept], aside), (["Kitchen"], [driveway, site, fence]))
+        kept, aside = self.reconcile(kept, set_aside=aside)          # and they don't come back on the next pass
+        self.assertEqual([row["name"] for row in kept], ["Kitchen"])
+
     def test_with_no_main_plans_known_no_label_is_set_aside(self):
         kept, aside = self.reconcile([self.space("Kiosk", "", 5)])
         self.assertEqual(([row["name"] for row in kept], aside), (["Kiosk"], []))

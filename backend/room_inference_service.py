@@ -92,6 +92,7 @@ def reconcile_spaces(spaces, set_aside, proposal_rooms, removed, page_levels, ma
     these spaces directly, so a room removed or moved only in the proposal comes back as a duplicate (house set 15:
     Dining, Kitchen and Living twice; Happy Cap's Bar).
 
+    - A site or landscape label (Driveway, Site, a fence or boundary) is always set aside.
     - A room removed as not on the plan is set aside (and restored if a later answer brings it back).
     - A label seen only off the main plans that isn't a known room is set aside: an area table's "ELEMENT m" or "Behind
       Building Line:" isn't a room (house set 18).
@@ -109,6 +110,9 @@ def reconcile_spaces(spaces, set_aside, proposal_rooms, removed, page_levels, ma
             continue
         name = str(space.get("name") or "").casefold()
         pages = {item.get("page") for item in space.get("evidence", []) if isinstance(item, dict) and item.get("page")}
+        if not room_inference.plausible_room_label(space.get("name")):
+            aside.append(space)          # Driveway, Site, Timber Fence BDY m: set 17's site plan, 2026-11-15
+            continue
         if name in removed or (main_pages and name not in levels_by_name and pages and not pages & set(main_pages)):
             aside.append(space)
             continue

@@ -16,7 +16,7 @@ from ai.room_use_resolution import room_identity
 from ai.drawing_coverage import has_current_level_classification
 
 
-VERSION = "local-room-inference-v8"
+VERSION = "local-room-inference-v9"
 NON_ROOM_LABEL = re.compile(
     r"^(?:site(?:\s+(?:area|plan))?|lot(?:\s+area)?)$"
     r"|^(?:driveway|landscape|setback|footpath|road|street|paving)\b"

@@ -112,6 +112,21 @@ def main():
     ], "surfaces": [], "openings": [], "constructions": [], "lighting": [], "equipment": []}
     deduplicate(duplicate_fixture)
     check("same-label same-page Unassigned duplicate loses to named level", len(duplicate_fixture["spaces"]) == 1 and duplicate_fixture["spaces"][0]["level_name"] == "Level 2")
+    site_fixture = {"spaces": [
+        {"name": "Driveway", "area": "985.8m²", "level_name": "", "evidence": [{"page": 19}]},
+        {"name": "Site", "area": "1985.80 m2", "level_name": "", "evidence": [{"page": 19}]},
+        {"name": "Timber Fence BDY m", "area": "290.72 m²", "level_name": "", "evidence": [{"page": 19}]},
+        {"name": "Kitchen", "area": "", "level_name": "Ground Floor", "evidence": [{"page": 8}]},
+    ], "surfaces": [], "openings": [], "constructions": [], "lighting": [], "equipment": []}
+    deduplicate(site_fixture)
+    check("site, driveway and fence labels never become spaces (set 17)",
+          [space["name"] for space in site_fixture["spaces"]] == ["Kitchen"])
+    site_page = build_building_evidence({"source_pdf": "fixture.pdf", "drawing_set": {"pages": [
+        {"page": 19, "title": "Site plan", "level_name": "Ground Floor", "sheet_classification": "floor_plan",
+         "rooms": [{"name": "Driveway", "area": "985.8m²"}, {"name": "Living", "area": "22 m²"}],
+         "structured_content": {"markdown": "SITE AREA: 1985.80 m2"}}]}}, {})
+    check("a plan's site-area text and driveway don't become spaces",
+          {space["name"] for space in site_page["spaces"]} <= {"Living"})
 
     elevation = [{"page": 7, "title": "Shopfront Elevation", "level_name": "Ground Floor",
                   "sheet_classification": "elevation", "thermal_role": "surface_confirmation", "rooms": [],
