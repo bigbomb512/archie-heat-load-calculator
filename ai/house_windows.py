@@ -279,6 +279,50 @@ def sill_and_head(record):
 
 # --- Tags on plans ---------------------------------------------------------------------------------------------------
 
+def _rotation(char):
+    """'up' or 'down' for a character printed along the page's height (its text matrix turned ~90°), else None.
+    pdfplumber's "upright" flag isn't used: it was True for set 16's rotated tags."""
+    matrix = char.get("matrix") or (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    a, b = float(matrix[0]), float(matrix[1])
+    if abs(b) <= abs(a):
+        return None
+    return "up" if b > 0 else "down"
+
+
+def rotated_words(chars):
+    """Words printed along the page's height, from the page's characters in PDF order. A tag beside a wall running up the
+    sheet is printed this way; position-order words split it into single letters, so every window on those walls
+    was missed (set 16 page 6, 2026-11-28). Letters join while they keep the same rotation and column and step along
+    the line with about no gap between one letter and the next."""
+    words, run = [], []
+
+    def flush():
+        if run:
+            words.append({"text": "".join(char["text"] for char in run),
+                          "x0": min(float(char["x0"]) for char in run), "x1": max(float(char["x1"]) for char in run),
+                          "top": min(float(char["top"]) for char in run), "bottom": max(float(char["bottom"]) for char in run),
+                          "upright": False})
+            run.clear()
+
+    for char in chars:
+        direction = _rotation(char)
+        if direction is None or not str(char.get("text", "")).strip():
+            flush()
+            continue
+        if run:
+            last = run[-1]
+            size = max(float(last.get("size") or 0) or float(last["bottom"]) - float(last["top"]), 1.0)
+            # The gap from the end of the last letter to the start of this one, along the line: about zero inside a word
+            # (set 16's "HLW_01": a wide W follows a narrow L with no gap).
+            gap = (float(last["top"]) - float(char["bottom"])) if direction == "up" else (float(char["top"]) - float(last["bottom"]))
+            same_column = abs((float(char["x0"]) + float(char["x1"])) / 2 - (float(last["x0"]) + float(last["x1"])) / 2) <= 0.6 * size
+            if _rotation(last) != direction or not same_column or not -0.6 * size <= gap <= 0.6 * size:
+                flush()
+        run.append(char)
+    flush()
+    return words
+
+
 def find_window_tags(words, page, level=None, same_within=3.0):
     """Window marks printed on one floor-plan page: [{"mark", "x", "y", "page", "level"}] in PDF points. The words may
     come from two readings of the page (position order and text order); a mark read twice at one spot is one tag."""

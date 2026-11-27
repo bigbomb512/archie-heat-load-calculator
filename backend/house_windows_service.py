@@ -21,7 +21,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v14"  # v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
+VERSION = "house-windows-text-v15"  # v15: tags printed up the page are read (set 16: 9 of 28 windows, 2026-11-28); v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -139,7 +139,9 @@ def _pdf_pages(source):
             if words is not None:
                 _FLOWED.move_to_end(key)
         if words is None:
-            words = doc.pages[number - 1].extract_words(use_text_flow=True)
+            page = doc.pages[number - 1]
+            # Plus tags printed up the page (beside walls running up the sheet), which neither word order reads.
+            words = page.extract_words(use_text_flow=True) + house_windows.rotated_words(getattr(page, "chars", None) or [])
             with _FLOWED_LOCK:
                 _FLOWED[key] = words
                 while len(_FLOWED) > 16:
