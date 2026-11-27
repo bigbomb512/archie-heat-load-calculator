@@ -47,6 +47,22 @@ class WeatherPickTests(unittest.TestCase):
             weather.pick(None, project, provider=provider)
             self.assertEqual(len(provider.prompts), 1)                       # same clues: no second call
 
+    def test_a_pick_from_an_address_that_has_since_changed_is_labelled_out_of_date(self):
+        # The pick runs during a drawing round; an address typed on the Project tab afterwards doesn't re-run it, so the
+        # result kept a location picked from the old address and still called it picked from the site details.
+        with TemporaryDirectory() as folder, patch.object(weather.design_weather, "load_table", return_value=TABLE):
+            project = job(folder, setup={"address": "Shop 3, 22 King William St, Kent Town SA 5067"})
+            weather.pick(None, project, provider=FakeProvider({}))
+            self.assertEqual(weather.effective(folder), ("Adelaide", "named in the site details; change it on the Project tab"))
+            (Path(folder) / "job_setup.json").write_text(json.dumps({"address": "26 Todman Ave, West Pymble NSW"}), encoding="utf-8")
+            location, note = weather.effective(folder)
+            self.assertEqual(location, "Adelaide")                            # kept, so the load doesn't move silently
+            self.assertIn("picked from an earlier address (Shop 3, 22 King William St, Kent Town SA 5067)", note)
+            self.assertIn("choose the weather location on the Project tab", note)
+            (Path(folder) / "job_setup.json").write_text(json.dumps({"address": " Shop 3, 22 King William St,  Kent Town SA 5067 "}),
+                                                         encoding="utf-8")
+            self.assertEqual(weather.effective(folder)[1], "named in the site details; change it on the Project tab")
+
     def test_a_listed_place_or_state_in_the_site_details_needs_no_ai_call(self):
         with TemporaryDirectory() as folder, patch.object(weather.design_weather, "load_table", return_value=TABLE):
             project = job(folder, setup={"address": "Shop 3, 22 King William St, Kent Town SA 5067"})
