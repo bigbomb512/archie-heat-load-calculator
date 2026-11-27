@@ -66,3 +66,10 @@ OpenRouter (`OPENROUTER_API_KEY`), model `anthropic/claude-haiku-5.5` for drawin
 3. Show the user the overlays and counts for every house, including any that get worse, and get approval before changing a saved job or recalculating. Turramurra's saved 9.81 kW is probably too low.
 4. Then decide about the other 11 houses (the review flags 156 printed names with no outline across all 12).
 5. Ask the user whether to commit or open a PR for this branch. They haven't said yet.
+
+## Done on 27 Nov
+- PR #25 (neutral ink, Manrope, and a neutral dark palette for the landing page: page `#0d1117`, sheet `#161b22`, action `#7cc0e8`) is merged.
+- PR #23 is merged. The smoke-gate failure ("building and room-use duplicates yield one picker row") is fixed in `backend/reviewer_room_geometry_service._rooms`: a trace-added proposal row is skipped when building or room-use evidence already names the room.
+- PR #24 is rebased onto main (this branch).
+- **Turramurra saved job recalculated:** the room list was confirmed on the user's instruction, with the same scope as the 26 Nov copy. Included: 16 traced cooled rooms, 296.0 m². Excluded: Driveway, Timber Fence, Basement Storage, and entries with no outline. **Result: 14.48 kW** at 5 pm (49 W/m²), against the old 9.81 kW. The components are identical to the copy. The earlier "17 rooms" was a miscount. Backup from before the confirmation: `output/backups/turramurra-1794567651-before-confirm-2026-11-27`.
+- Still open: engineer review of the method; the Driveway/Fence site-works labels still appear as candidates (the `set17-continue` branch addresses this); the remaining unmerged worktree branches.
