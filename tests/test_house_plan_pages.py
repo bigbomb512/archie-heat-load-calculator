@@ -81,8 +81,13 @@ class RoomPerLevelTests(unittest.TestCase):
         rooms = [{"room_id": "ens-ground", "label": "Ensuite", "level_name": "Ground Floor"},
                  {"room_id": "ens-first", "label": "Ensuite", "level_name": "First Floor"},
                  {"room_id": "kitchen", "label": "Kitchen", "level_name": "Ground Floor"}]
-        self.assertEqual([row["room_id"] for row in self.rows(rooms, "First")], ["ens-first", "kitchen"])
+        self.assertEqual([row["room_id"] for row in self.rows(rooms, "First")], ["ens-first"])
         self.assertEqual([row["room_id"] for row in self.rows(rooms, "Ground")], ["ens-ground", "kitchen"])
+
+    def test_an_unassigned_room_is_still_offered_but_another_levels_room_is_not(self):
+        rooms = [{"room_id": "kitchen", "label": "Kitchen", "level_name": "Ground Floor"},
+                 {"room_id": "ens", "label": "Ensuite", "level_name": "Unassigned level"}]
+        self.assertEqual([row["room_id"] for row in self.rows(rooms, "First")], ["ens"])
 
     def test_one_level_keeps_the_first_room_of_the_name(self):
         rooms = [{"room_id": "a", "label": "Shop", "level_name": ""}, {"room_id": "b", "label": "Shop", "level_name": ""},

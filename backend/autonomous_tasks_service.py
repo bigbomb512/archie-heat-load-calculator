@@ -2105,7 +2105,8 @@ def _p0_corner_packets(root, force=False):
                       "sketches": sketches, "sketch": [[round(x, 2), round(y, 2)] for x, y in list(main.exterior.coords)[:-1]],
                       "sketch_area_px": round(union.area, 1), "corners": [[round(x, 2), round(y, 2)] for x, y in corners],
                       "corner_kinds": kinds, **({"tenancy_area_px": round(tenancy.area, 1)} if tenancy is not None else {}),
-                      "transform": transform, "calibration": calibration}
+                      "transform": transform, "calibration": calibration,
+                      "wall_style_ids": wall_style_ids or [], "raster_mode": False}
             result.append(("P0_outline_corners", target, packet, room_outline.corner_outline_prompt(subject, len(corners)),
                            [_png_bytes(image)], ""))
     return result
@@ -2191,6 +2192,22 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
                        "validation": validated, "block_reason": ""})
         return record
     room = packet["room"]
+    name_review = wall_review = ""
+    if packet.get("corners"):  # complete corner packets have the page evidence; legacy synthetic callers may not
+        context = _p0_context(root, page)
+        labels = _p0_label_points(root, page, context)
+        page_names = _p0_page_room_text(root, page)
+        room, name_review = room_outline.outline_printed_label(max(parts, key=lambda part: part.area).exterior.coords[:],
+                                                                room, labels, page_names)
+        source = _current_task(root, packet.get("source_task", "P0_room_outlines"), f"page-{page}") or {}
+        source_rows = source.get("validation") or []
+        source_rows = source_rows.get("result", source_rows) if isinstance(source_rows, dict) else source_rows
+        open_sides = next((row.get("open_sides", "") for row in source_rows if isinstance(row, dict)
+                           and row.get("room", "").casefold() == packet["room"].casefold()), "")
+        _walls, _areas, segments = _p0_walls_areas(root, page, context, packet["calibration"],
+                                                    packet.get("wall_style_ids", []), packet.get("raster_mode", False))
+        wall_review = room_outline.outline_wall_review(list(max(parts, key=lambda part: part.area).exterior.coords)[:-1],
+                                                         segments, mm_per_px, open_sides)
     tenancy = _tenancy_polygon(root, page)
     clipped = [piece for part in parts for piece in room_outline.clip_to_tenancy(part, tenancy, mm_per_px, min_m2=0)]
     others = [(row["room_label"], Polygon(row["points_image_px"]).buffer(0))
@@ -2222,8 +2239,10 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows, record["run_id"],
         record["quality_label"], replace_pages=[page], replace_room_labels=[room, *{row.get("room_label") for row in rows if row.get("room_label")}], defer=defer)
-    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
-                   "applied_value": {"rooms": _p0_result_rooms(prepared), "note": note, "label": record["quality_label"]},
+    review = "; ".join(filter(None, (name_review, wall_review)))
+    record.update({"status": "below_accuracy_bar" if review else _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                   "applied_value": {"rooms": _p0_result_rooms(prepared), "note": note, "label": record["quality_label"],
+                                     **({"needs_review": review} if review else {})},
                    "validation": validated, "block_reason": ""})
     return record
 
@@ -3591,6 +3610,27 @@ def _number_separate_repeated_rooms(root, record, polygons, mm_per_px):
 SQUARED_METHODS = {"ai_outline_snapped", "ai_corner_outline", "ai_split_snapped"}
 
 
+def _room_ids_on_page_level(rooms, level):
+    """Turramurra: a plan's room label may reuse only that plan level's identity."""
+    from ai.page_inventory import level_key
+    wanted = level_key(level)
+    ids, unassigned = {}, {}
+    for room in rooms:
+        key, room_level = room["label"].casefold(), level_key(room.get("level_name"))
+        if not wanted or room_level == wanted:
+            ids.setdefault(key, room["room_id"])
+        elif room_level in {"", "unassigned"}:
+            # A room the list hasn't placed on a level is still this plan's room; only another level's room is refused.
+            unassigned.setdefault(key, room["room_id"])
+    return {**unassigned, **ids}
+
+
+def _outline_plan_level(root, page):
+    """Use the selected main plan page's level for Turramurra outline identities."""
+    selected = next((row for row in _p0_main_geometry_pages(Path(root)) if row.get("page") == page), {})
+    return selected.get("level_name") or _page_level(Path(root), page)
+
+
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
@@ -3600,18 +3640,9 @@ def _p0_trace_rows(root, record, polygons):
         polygons = _number_separate_house_bedrooms(root, record, polygons, float(calibration["mm_per_px"]))
     polygons = _number_separate_repeated_rooms(root, record, polygons, float(calibration["mm_per_px"]))
     rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
-    room_ids = {}
-    for room in rooms:
-        room_ids.setdefault(room["label"].casefold(), room["room_id"])
-    # A name on more than one level (a house's Bathroom, Corridor, Ensuite) is this page's level's room.
-    from ai.page_inventory import level_key
-    page_level = level_key(_page_level(root, page))
-    levels = {}
-    for room in rooms:
-        levels.setdefault(room["label"].casefold(), {}).setdefault(level_key(room.get("level_name")), room["room_id"])
-    for label, by_level in levels.items():
-        if len(by_level) > 1 and page_level in by_level:
-            room_ids[label] = by_level[page_level]
+    # Turramurra: a page 9 outline must never borrow the same label's page 8 room identity.
+    page_level = _outline_plan_level(root, page)
+    room_ids = _room_ids_on_page_level(rooms, page_level)
     printed = {row["label"].casefold(): float(row["area_m2"]) for row in _inferred_room_data(root)
                if isinstance(row.get("area_m2"), (int, float)) and row["area_m2"] > 0}
     counts = {}
@@ -3638,7 +3669,7 @@ def _p0_trace_rows(root, record, polygons):
                                 for index in range(len(coords) - 1))
         if signed_twice_area < 0:
             coords = list(reversed(coords))
-        results.append({"room_id": room_id, "room_label": row["label"], "page": page,
+        results.append({"room_id": room_id, "room_label": row["label"], "level_name": page_level, "page": page,
             "points_image_px": coords, "snapped_line_ids": [None] * len(coords),
             "calibration": calibration, "part_index": indexes[row["label"]], "part_count": counts[row["label"]],
             "ai_measured_area_m2": room_outline.area_m2(row.get("net_polygon") or polygon, mm_per_px),
@@ -3822,6 +3853,15 @@ def _outlined_names_to_add(packet, validated, rooms):
 def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     from shapely.geometry import Polygon
     from backend import room_proposal
+    context = _p0_context(root, record["packet"]["page"])
+    labels = _p0_label_points(root, record["packet"]["page"], context)
+    page_names = _p0_page_room_text(root, record["packet"]["page"])
+    reviews = []
+    validated = [dict(row) for row in validated]
+    for row in validated:
+        row["room"], reason = room_outline.outline_printed_label(row["points"], row["room"], labels, page_names)
+        if reason:
+            reviews.append(reason)
     asked_names = {str(name).casefold() for name in record["packet"].get("room_names", [])}
     use_named = sorted({row["room"] for row in validated if row["room"].casefold() not in asked_names})
     # Rooms named by their use (a space no printed name covers) must be in the room list before their outlines are saved.
@@ -3831,7 +3871,6 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
         root, "P0_room_outlines_read", record["packet"]["page"], _page_level(root, record["packet"]["page"]),
         _outlined_names_to_add(record["packet"], validated, reviewer_room_geometry_service._rooms(
             reviewer_room_geometry_service._paths({"review_dir": str(root)}))), record["run_id"], named_on_plan=True)
-    context = _p0_context(root, record["packet"]["page"])
     calibration = record["packet"]["calibration"]
     _walls, _areas, segments = _p0_walls_areas(root, record["packet"]["page"], context, calibration,
         record["packet"].get("wall_style_ids", []), record["packet"].get("raster_mode", False))
@@ -3840,6 +3879,9 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     tenancy = _tenancy_polygon(root, record["packet"]["page"])
     mm_per_px = float(calibration["mm_per_px"])
     for row in validated:
+        reason = room_outline.outline_wall_review(row["points"], segments, mm_per_px, row.get("open_sides", ""))
+        if reason:
+            reviews.append(f"{row['room']}: {reason}")
         snapped, report = room_outline.snap_polygon(row["points"], segments, snap_px)
         note = (f"Open sides: {row.get('open_sides','')}; snapped {report['snapped_edges']}/{report['edges']} edges"
                 + ("; the AI's outline crossed itself and was split where it crossed" if row.get("repaired") else ""))
@@ -3868,8 +3910,9 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
         record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]],
         replace_room_labels=[*{row["room"] for row in validated},
                              *{row.get("room_label") for row in rows if row.get("room_label")}], **trace_kwargs)
-    record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
-        "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"]},
+    record.update({"status":"below_accuracy_bar" if reviews else _status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
+        "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"],
+                         **({"needs_review": reviews} if reviews else {})},
         "validation":validated,"block_reason":""})
     return record
 

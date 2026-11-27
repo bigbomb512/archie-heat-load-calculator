@@ -130,6 +130,10 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
         room = room_lookup.get(room_id)
         if not room or room_id in human_room_ids:
             continue
+        # Turramurra: never save a page's trace under a same-named room from another floor.
+        from ai.page_inventory import level_key
+        if row.get("level_name") and level_key(room.get("level_name")) != level_key(row["level_name"]):
+            raise ValueError("AI room outline room identity belongs to another plan level.")
         if page not in vector_fps or not isinstance(points, list) or len(points) < 4:
             raise ValueError("AI room outline does not reference a current room and plan page.")
         calibration = deepcopy(row.get("calibration") or {})
@@ -137,7 +141,7 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
         if not usable_calibration(calibration.get("status")) or not calibration.get("mm_per_px"):
             raise ValueError("AI room outline needs a calibrated printed dimension.")
         prepared.append({"trace_id": str(row.get("trace_id") or "ai_room_trace_" + fingerprint([ai_run_id, room_id, page, row.get("part_index")])[:18]),
-            "room_id": room_id, "room_label": room.get("label"), "level_name": room.get("level_name", ""),
+            "room_id": room_id, "room_label": room.get("label"), "level_name": row.get("level_name") or room.get("level_name", ""),
             "page": page, "points_image_px": points, "snapped_line_ids": row.get("snapped_line_ids", [None] * len(points)),
             "calibration": calibration, "reviewer": "Archie AI (P0)", "note": row.get("note", ""),
             "status": "geometry_proposed", "created_at": ai_preliminary.now(),
