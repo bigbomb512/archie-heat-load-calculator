@@ -123,6 +123,9 @@ function content(data, projectId) {
     </form>`;
 }
 
+// An empty box is sent empty, not as 0, so the server asks for the number instead of saying 0 is out of range.
+const typedNumber = (text) => (text === "" || text === undefined ? "" : Number(text));
+
 function value(row, field) {
   const input = row.querySelector(`[data-field="${field}"]`);
   if (!input) return undefined;
@@ -157,7 +160,7 @@ export function collectChanges(form, data) {
     if (glass === "drawings") {
       if (fix.glass) change.glass = "drawings";
     } else if (glass === "other") {
-      const typed = { u_value_w_m2k: Number(value(row, "glass_u")), shgc: Number(value(row, "glass_shgc")), source: value(row, "glass_source") };
+      const typed = { u_value_w_m2k: typedNumber(value(row, "glass_u")), shgc: typedNumber(value(row, "glass_shgc")), source: value(row, "glass_source") };
       if (!fix.glass || typed.u_value_w_m2k !== fix.glass.u_value_w_m2k || typed.shgc !== fix.glass.shgc || typed.source !== (fix.glass.source || ""))
         change.glass = typed;
     } else {
@@ -172,7 +175,7 @@ export function collectChanges(form, data) {
     if (kind === "none") {
       if (fix.shade !== null) change.shade = "none";
     } else if (kind) {
-      const shade = { kind, depth_m: Number(value(row, "shade_depth")) };
+      const shade = { kind, depth_m: typedNumber(value(row, "shade_depth")) };
       const gap = value(row, "shade_gap");
       if (gap !== "") shade.gap_m = Number(gap);
       const old = fix.shade || {};
@@ -243,8 +246,9 @@ export async function renderFix(projectId) {
         }
         save.disabled = true;
         line.textContent = "Saving…";
+        let saved = null;
         try {
-          const saved = await sendJson("/api/quick-fix", { project_id: projectId, ...changes, reviewer: "Quick fixes" });
+          saved = await sendJson("/api/quick-fix", { project_id: projectId, ...changes, reviewer: "Quick fixes" });
           dirty = false;
           line.textContent = `Saved: ${saved.applied.join(" ")} Updating the load…`;
           const status = data.status || {};
@@ -257,7 +261,10 @@ export async function renderFix(projectId) {
             navigate(projectId, "rooms");
           }
         } catch (error) {
-          line.textContent = `Not saved or not updated: ${error.message}`;
+          // Once the fixes are saved, a failed update must not read as a failed save: saving again only retries it.
+          line.textContent = saved
+            ? `Saved, but the load didn't update: ${error.message} Save again to retry the update.`
+            : `Not saved: ${error.message}`;
           save.disabled = false;
         }
       });
