@@ -20,6 +20,9 @@ Do not remove engineering evidence, review gates, scope labels, or infer missing
 `landing.html` leads directly to Jobs and New job. `landing-workspace.css` is
 scoped to that page and has light and dark palettes. The page describes the
 actual four-step job flow and current calculation scope.
+The dark palette uses a neutral page `#0d1117`, sheet `#161b22`, ink `#e6edf3`,
+muted text `#9198a1`, border `#30363d`, faint steel wash `#1f2a33`, and light
+steel action `#7cc0e8`. Filled action text uses the dark page colour.
 
 `landing-theme.js` runs in the head before styles paint. It follows the system
 colour preference until an explicit toggle selection, then persists that choice
