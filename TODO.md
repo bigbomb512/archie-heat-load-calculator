@@ -24,6 +24,56 @@ tools/evaluate_portfolio.py to track stage coverage, blockers and change across
 permitted project cases. Coverage is not an accuracy or engineering-validation
 claim.
 
+## Build queue
+
+Autonomous sessions work this list from the top, one task per `auto/<name>` branch (rules: `CLAUDE.md`). Status
+markers: `[ ]` to do, `[x]` done (add the PR link), `[blocked]` (add the error), `[needs engineer]` (add the question;
+details go in `DECISIONS.md`). Only put tasks here that can be finished without paid AI calls, a browser, the web,
+or new calculation values. Order is priority; a person reorders it.
+
+1. [x] (open PR, not merged: [PR #30](https://github.com/bigbomb512/archie-heat-load-calculator/pull/30)) Results page: show the unit sizes and the design-day chart that `backend/contractor_report.py` already puts in
+   the report, using the existing Results styles; add a headless Playwright test for them and for the "Create the
+   report" button. (From "The report to send".)
+2. [x] (open PRs, not merged: [PR #31](https://github.com/bigbomb512/archie-heat-load-calculator/pull/31); Cancel guard follow-up [PR #33](https://github.com/bigbomb512/archie-heat-load-calculator/pull/33)) Quick-fix screen: add a headless Playwright test of its save flow, and fix what it finds. (From set 17 fixes.)
+3. [x] (open PR, not merged: [PR #32](https://github.com/bigbomb512/archie-heat-load-calculator/pull/32)) What-we-need-to-find page: show the wall-legend notes (Dincel, brick cavity, stud) that
+   `construction_u_values.plan_wall_legend` already records, labelled "for review, not used in the calculation". The
+   U-value question stays [needs engineer]. (From set 17 fixes.)
+4. [x] (on main: `84e129d` bedrooms, `1b2a40a` other names; no PR needed) Rooms that print the same name twice on one level (two "Bedroom" labels) become separate rooms (Bedroom (1),
+   Bedroom (2)) when each has its own enclosed outline; run the Turramurra calculation check. (From set 17 fixes.)
+5. [x] (open PR, not merged: [PR #35](https://github.com/bigbomb512/archie-heat-load-calculator/pull/35)) Fix the tests that fail now and then in full runs
+   (`job-preview.spec.mjs:296`, `room-joins.spec.mjs`). Cause: the web server's listen queue of 5 dropped some of a
+   page load's ~20 connections on a busy machine; raised to 128, with a regression test.
+
+Not for autonomous runs: live set 17/19/20 re-runs (paid AI), other brands' unit ranges and capacity tables (need
+manufacturer data from the web), wall-legend U-values, safety-factor, sign-policy and radiant-fraction decisions
+(engineering judgment), and anything under "Deferred".
+
+### Session summaries
+
+<!-- Autonomous sessions add a dated summary here: done, PRs, blocked, needs a decision. -->
+
+**2026-11-27.** All four queue tasks closed. Each PR was branched from main and passed both checks after its last change
+(smoke gate; headless `npx playwright test`). None is merged.
+- Task 1, [PR #30](https://github.com/bigbomb512/archie-heat-load-calculator/pull/30): Results shows the report's unit
+  sizes (new read-only `/api/unit-sizes`), with tests for them and for "Create the report". The design-day chart was
+  already on Results.
+- Task 2, [PR #31](https://github.com/bigbomb512/archie-heat-load-calculator/pull/31): headless test of the quick-fix
+  save flow. It found and fixed two faults: a failed update after a good save said "Not saved", and empty number boxes
+  were sent as 0.
+- Task 3, [PR #32](https://github.com/bigbomb512/archie-heat-load-calculator/pull/32): wall-legend notes are shown in
+  the Operating loads questions panel, labelled "for review, not used in the calculation".
+- Task 4: already done on main (`84e129d`, `1b2a40a`; tests pass). No change made and no PR. The empty local branch
+  `auto/duplicate-room-names` is left in place (the rules don't allow deleting branches).
+- Blocked: none. No calculation code changed, so the Turramurra check wasn't needed.
+- Decided later the same day (DECISIONS.md): (1) wall-legend notes stay for review only, [needs engineer];
+  (2) Cancel asks before it discards unsaved fixes: [PR #33](https://github.com/bigbomb512/archie-heat-load-calculator/pull/33),
+  stacked on #31; (3) `CLAUDE.md`, `DECISIONS.md` and this Build queue are committed in one docs PR, to merge before the
+  next autonomous run. Also: `job-preview.spec.mjs:296` and
+  `room-joins.spec.mjs:68` fail now and then in full runs and pass on re-run. They're worth fixing as a queue task.
+- Later the same day: fixed as queue task 5, [PR #35](https://github.com/bigbomb512/archie-heat-load-calculator/pull/35).
+  A failure trace showed two modules never answered; the server's listen queue (Python's default of 5) dropped
+  connections under load. Stressed runs: 15/60 failed before, 0/60 after. The queue has no tasks left.
+
 ## Open implementation and validation work
 
 The existing Drawing 6 evidence-fusion and review work is a project-specific
@@ -142,7 +192,8 @@ carpet, 10% glass, nonsolar; within 2 points per hour). Record in
 (`docs/PHASE2_AUDIT_2026-11-12.md`, "The report to send").
 
 - [ ] Show the unit sizes and the design-day chart on the Results page too, not only in the report; then run the
-  browser check (`docs/BROWSER_TEST_LOOP.md`) on the page and the "Create the report" button.
+  browser check (`docs/BROWSER_TEST_LOOP.md`) on the page and the "Create the report" button. The design-day chart
+  is on main. Unit sizes and headless tests of both are in open PR #30 (not merged).
 - [ ] Unit size steps are one manufacturer's range (Daikin Australia, checked 2026-11-13); let the operator pick a
   brand's range, and recheck the list each year.
 - [ ] Unit capacity at the design temperature: the report only says to check it; a manufacturer's capacity table per
@@ -157,14 +208,18 @@ and checked is in `docs/SET17_FIXES_2026-11-14.md`.
 
 - [ ] Re-run set 17 live on Codex with this branch (fresh room questions use the new room list) and score it; then
   sets 19 and 20.
-- [ ] Wall legends (Dincel 200, brick cavity, stud on set 17 page 25) are only noted for review; no U-value is set from
-  them and the note isn't shown on any page yet. Decide whether a legend may set the wall U-value (which wall is
-  which type is unknown), and show the note on the What-we-need-to-find page.
+- [needs engineer] Wall legends (Dincel 200, brick cavity, stud on set 17 page 25) are only noted for review, and no
+  U-value is set from them. Showing the note in the Operating loads questions panel is in open PR #32 (not merged).
+  Decided 2026-11-27: the notes stay for review only until an engineer approves a method. It must settle (a) what
+  evidence is enough to match a legend type to each wall and (b) the cited U-value for it. Answers go through the
+  existing review and cited-value route (DECISIONS.md).
 - [ ] Windows assigned to a room by the nearest printed label have no wall or direction (averaged sun, labelled);
   17 of set 17's 28 windows were still unplaced on the old traces.
-- [ ] Rooms that print the same name more than once on a level (two "Bedroom" labels) are still one room; numbered
-  names are kept apart.
-- [ ] The Quick-fix screen's save flow hasn't been checked in a browser yet (`docs/BROWSER_TEST_LOOP.md`).
+- [x] Rooms that print the same name more than once on a level (two "Bedroom" labels) are separate rooms when a wall
+  is between them: on main since `84e129d` (Bedroom 1, 2, …) and `1b2a40a` (Ensuite (1), (2), …).
+- [ ] The Quick-fix screen's save flow: a headless Playwright test, with the two faults it found fixed, is in open
+  PR #31. Cancel asking before it discards unsaved fixes is in open PR #33 (stacked on #31). Neither is merged; tick
+  this once they are.
 
 ## Deferred — annual and monthly energy analysis
 

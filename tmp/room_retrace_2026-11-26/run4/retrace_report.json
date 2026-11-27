@@ -1,0 +1,1232 @@
+{
+  "mode": "live",
+  "calls_made": 53,
+  "summary": {
+    "packets": [
+      {
+        "page": 8,
+        "task": "P0_room_names",
+        "target": "page-8",
+        "room_names": [
+          "Alfresco",
+          "Bedroom 5",
+          "Dining",
+          "Ensuite",
+          "Entry",
+          "Garage",
+          "Kitchen",
+          "Laundry",
+          "Linen",
+          "Living",
+          "Media",
+          "Scullery",
+          "Sitting",
+          "Study",
+          "Wir"
+        ],
+        "images": 1
+      },
+      {
+        "page": 9,
+        "task": "P0_room_names",
+        "target": "page-9",
+        "room_names": [
+          "Balcony",
+          "Balcony shown",
+          "Bathroom",
+          "Bedroom 2",
+          "Bedroom 3",
+          "Bedroom 4",
+          "Ensuite",
+          "Garage",
+          "Linen",
+          "Master Bedroom",
+          "Sitting",
+          "Storage",
+          "Study nook",
+          "Walk in robe",
+          "Wir"
+        ],
+        "images": 1
+      },
+      {
+        "page": 25,
+        "task": "P0_room_names",
+        "target": "page-25",
+        "room_names": [
+          "CELLAR",
+          "Cellar",
+          "Storage"
+        ],
+        "images": 1
+      }
+    ],
+    "provider_calls_available_now": 3,
+    "provider_calls_total": null,
+    "call_count_note": "Later packets and validation retries depend on live replies; an exact total cannot be known in dry run."
+  },
+  "stopped_reason": "P0 did not settle in 16 rounds.",
+  "room_outcomes": [
+    {
+      "page": 8,
+      "room": "Alfresco",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Bedroom 5",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Dining",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Ensuite",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Entry",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Garage",
+      "task": "P0_room_outlines",
+      "outcome": "rejected",
+      "reason": "The outline for Garage needs at least three corner points."
+    },
+    {
+      "page": 8,
+      "room": "Kitchen",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Linen",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Living",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Media",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Sitting",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Study",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Wir",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 9,
+      "room": "Balcony",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "Bedroom 3",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "Garage",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "Linen",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "R O B E",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "Sitting",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "Storage",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 9,
+      "room": "Wir",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "The reply leaves out R O B E. Every room in the list is on this plan (the other images show where each is named): draw each one, or put it under not_drawn with the reason."
+    },
+    {
+      "page": 8,
+      "room": "Alfresco",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The west side, between corner 17 and corner 41, is the folding-door (DO4) opening to the dining room. Its south end, at the wall corner near (1222, 515), has no numbered point, so the outline there is taken from corner 41."
+    },
+    {
+      "page": 8,
+      "room": "Bedroom 5",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Dining",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The west side of Dining, running along the x\u2248928 line from the bottom-left corner (near 39) north to the top-left corner (near 10), has no numbered corner."
+    },
+    {
+      "page": 8,
+      "room": "Ensuite",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The bottom-left corner of the room, where the bottom wall meets the left wall near (80,563), has no numbered corner; the sides run between the listed corners."
+    },
+    {
+      "page": 8,
+      "room": "Entry",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked"
+    },
+    {
+      "page": 8,
+      "room": "Kitchen",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Laundry",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The short right-hand side between corner 7 and the counter edge at the bottom-right of Laundry has no numbered corner."
+    },
+    {
+      "page": 8,
+      "room": "Linen",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked"
+    },
+    {
+      "page": 8,
+      "room": "Living",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The north side of Living, between corner 38 and corner 46 along the sketched line at about y=712, has no numbered corner. It is an open boundary to Dining."
+    },
+    {
+      "page": 8,
+      "room": "Media",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked"
+    },
+    {
+      "page": 8,
+      "room": "Scullery",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The bottom boundary between corner 10 and corner 9 (the drawn boundary along the kitchen counter edge at about y=245, running left from 10 to the west wall near x=875) has no numbered corner."
+    },
+    {
+      "page": 8,
+      "room": "Sitting",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Study",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The west side runs from corner 48 down to corner 64 along the drawn joinery boundary at about x=395, with no numbered corner on it. The top-left corner of that boundary, near (395, 848), is also unnumbered."
+    },
+    {
+      "page": 8,
+      "room": "Wir",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The east side of Wir, along the wall at roughly x=245 between corner 32 (top) and corner 41 (bottom), has no numbered corner."
+    }
+  ],
+  "eval_room_tracing": {
+    "job": "turra_live4",
+    "summary": {
+      "printed_names": 32,
+      "names_without_position": 10,
+      "untraced_names": 10,
+      "traces": 32,
+      "merged_traces": 2,
+      "name_mismatches": 1,
+      "implausible_areas": 0
+    },
+    "pages": [
+      {
+        "page": 8,
+        "level": "Ground Floor",
+        "printed_names": [
+          {
+            "name": "GARAGE",
+            "x": 3638.3628205585055,
+            "y": 734.4291881903322
+          },
+          {
+            "name": "SCULLERY",
+            "x": 1990.922596776301,
+            "y": 776.23796564613
+          },
+          {
+            "name": "LAUNDRY",
+            "x": 2246.9185404268965,
+            "y": 776.23796564613
+          },
+          {
+            "name": "ALFRESCO",
+            "x": 2535.831284372068,
+            "y": 898.0510394355549
+          },
+          {
+            "name": "KITCHEN",
+            "x": 2114.5137428880257,
+            "y": 950.2870060056276
+          },
+          {
+            "name": "SITTING",
+            "x": 1647.1026796849944,
+            "y": 1042.40634580656
+          },
+          {
+            "name": "EN S U ITE",
+            "x": 1062.9513653802753,
+            "y": 1175.2967452017974
+          },
+          {
+            "name": "DINING",
+            "x": 2127.2904120490803,
+            "y": 1224.5320818109276
+          },
+          {
+            "name": "W IR",
+            "x": 1065.1391511955244,
+            "y": 1293.4965604132542
+          },
+          {
+            "name": "LINEN",
+            "x": 1316.934546080842,
+            "y": 1421.3233967494016
+          },
+          {
+            "name": "MEDIA",
+            "x": 1909.4869579161173,
+            "y": 1482.0611482088111
+          },
+          {
+            "name": "ENTRY",
+            "x": 1648.7278920048936,
+            "y": 1499.1897442358572
+          },
+          {
+            "name": "LIVING",
+            "x": 2247.356097589947,
+            "y": 1559.6024274494982
+          },
+          {
+            "name": "BEDROOM 5",
+            "x": 1129.4975590635356,
+            "y": 1588.095909453614
+          },
+          {
+            "name": "STUDY",
+            "x": 1448.5392390929933,
+            "y": 1613.4762378732519
+          }
+        ],
+        "names_without_position": [
+          "Bedroom",
+          "Corridor",
+          "Storage (1)",
+          "Store",
+          "Toilet"
+        ],
+        "untraced_names": [
+          "GARAGE",
+          "ALFRESCO",
+          "LINEN",
+          "ENTRY"
+        ],
+        "traces": [
+          {
+            "trace_id": "ai_room_trace_1be399e5b7689aa4e3",
+            "room": "Corridor",
+            "method": "enclosed_walls",
+            "area_m2": 4.02,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_0bb320997859abc312",
+            "room": "Alfresco",
+            "method": "ai_outline_snapped",
+            "area_m2": 5.41,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_44fd5b1902f04ec6ea",
+            "room": "Bedroom 5",
+            "method": "ai_outline_snapped",
+            "area_m2": 14.81,
+            "printed_names": [
+              "BEDROOM 5"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_d7dcdeaa90287db333",
+            "room": "Dining",
+            "method": "ai_outline_snapped",
+            "area_m2": 51.92,
+            "printed_names": [
+              "KITCHEN",
+              "DINING"
+            ],
+            "merged": true,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_d855b6832882ad9ed0",
+            "room": "Ensuite",
+            "method": "ai_outline_snapped",
+            "area_m2": 5.6,
+            "printed_names": [
+              "EN S U ITE"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_adacae17fed0a948ee",
+            "room": "Entry",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.04,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_9cc4c9f9e6b13c8959",
+            "room": "Kitchen",
+            "method": "ai_outline_snapped",
+            "area_m2": 10.58,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_9d5ebd7066fb2b18a2",
+            "room": "Living",
+            "method": "ai_outline_snapped",
+            "area_m2": 23.79,
+            "printed_names": [
+              "LIVING"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_abe69da171eb33d515",
+            "room": "Media",
+            "method": "ai_outline_snapped",
+            "area_m2": 24.29,
+            "printed_names": [
+              "MEDIA"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_21497c2b9696cf9a28",
+            "room": "Sitting",
+            "method": "ai_outline_snapped",
+            "area_m2": 26.61,
+            "printed_names": [
+              "SITTING"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_4d0f9f61c1de981b02",
+            "room": "Study",
+            "method": "ai_outline_snapped",
+            "area_m2": 14.65,
+            "printed_names": [
+              "STUDY"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_4712812c0877babf72",
+            "room": "Wir",
+            "method": "ai_outline_snapped",
+            "area_m2": 5.85,
+            "printed_names": [
+              "W IR"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_92a8c76daef26f2044",
+            "room": "Laundry",
+            "method": "ai_outline_snapped",
+            "area_m2": 5.86,
+            "printed_names": [
+              "LAUNDRY"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_c21b397cb6d0c4f456",
+            "room": "Toilet",
+            "method": "ai_outline_snapped",
+            "area_m2": 2.65,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_66155e82fa594d8e79",
+            "room": "Store",
+            "method": "ai_outline_snapped",
+            "area_m2": 4.95,
+            "printed_names": [
+              "SCULLERY"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          }
+        ]
+      },
+      {
+        "page": 9,
+        "level": "First Floor",
+        "printed_names": [
+          {
+            "name": "GARAGE /",
+            "x": 3548.838624998515,
+            "y": 814.9460921422873
+          },
+          {
+            "name": "STORAGE",
+            "x": 3548.838624998515,
+            "y": 845.6150308680863
+          },
+          {
+            "name": "BEDROOM 3",
+            "x": 1866.268811840027,
+            "y": 981.1809919784973
+          },
+          {
+            "name": "B A T H R O O M",
+            "x": 1633.6259190630606,
+            "y": 1110.6331695434883
+          },
+          {
+            "name": "BEDROOM 4",
+            "x": 2318.927947831665,
+            "y": 1144.077690983159
+          },
+          {
+            "name": "W IR",
+            "x": 1052.8750489969,
+            "y": 1196.663731048675
+          },
+          {
+            "name": "E NSU ITE",
+            "x": 1198.019010797135,
+            "y": 1210.8041997396163
+          },
+          {
+            "name": "R O B E",
+            "x": 1819.9002541899774,
+            "y": 1228.5204191340138
+          },
+          {
+            "name": "L IN E N",
+            "x": 1798.034897670717,
+            "y": 1269.1039393557598
+          },
+          {
+            "name": "E N S U I T E",
+            "x": 2231.3790103220135,
+            "y": 1326.3159506110621
+          },
+          {
+            "name": "BE D R OOM 2",
+            "x": 1098.7435413177493,
+            "y": 1363.4862542522362
+          },
+          {
+            "name": "S T U D Y N OOK",
+            "x": 1667.2553124517456,
+            "y": 1410.9587207593129
+          },
+          {
+            "name": "WAL K I N R O B E",
+            "x": 2199.849891315968,
+            "y": 1535.5848851371215
+          },
+          {
+            "name": "S I T T I N G",
+            "x": 1399.6203482640249,
+            "y": 1610.5256184116586
+          },
+          {
+            "name": "MASTER BEDROOM",
+            "x": 1909.0243974866075,
+            "y": 1680.4653017512912
+          },
+          {
+            "name": "BALCONY",
+            "x": 1651.4782513154926,
+            "y": 1857.5149720717316
+          }
+        ],
+        "names_without_position": [
+          "Balcony shown",
+          "Bedroom",
+          "Corridor"
+        ],
+        "untraced_names": [
+          "GARAGE /",
+          "STORAGE",
+          "W IR",
+          "L IN E N",
+          "S I T T I N G",
+          "BALCONY"
+        ],
+        "traces": [
+          {
+            "trace_id": "ai_room_trace_47918fbe0c6a91e4ab",
+            "room": "Balcony shown",
+            "method": "enclosed_walls",
+            "area_m2": 59.99,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_b65ad4234c2307a09b",
+            "room": "Storage (2)",
+            "method": "enclosed_walls",
+            "area_m2": 7.2,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_e024097df95ffe6972",
+            "room": "Storage (1)",
+            "method": "enclosed_walls",
+            "area_m2": 4.31,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_7e345bdcfd95c1ea69",
+            "room": "Bathroom",
+            "method": "enclosed_walls",
+            "area_m2": 3.05,
+            "printed_names": [
+              "B A T H R O O M"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_cec592d49f2d996f2e",
+            "room": "Ensuite (1)",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.0,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_18c704fc1fbe60e70a",
+            "room": "Ensuite (2)",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.19,
+            "printed_names": [
+              "E NSU ITE"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_eac151bcf6b971d882",
+            "room": "Ensuite (3)",
+            "method": "ai_outline_snapped",
+            "area_m2": 7.14,
+            "printed_names": [
+              "E N S U I T E"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_b614efc721b3c990c9",
+            "room": "Balcony",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.07,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_c65a468fd181efd6f5",
+            "room": "Bedroom 2",
+            "method": "ai_outline_snapped",
+            "area_m2": 17.94,
+            "printed_names": [
+              "BE D R OOM 2"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_ed950f8b3b8aba26a9",
+            "room": "Bedroom 3",
+            "method": "ai_outline_snapped",
+            "area_m2": 15.23,
+            "printed_names": [
+              "BEDROOM 3",
+              "R O B E"
+            ],
+            "merged": true,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_c815273f22c478845b",
+            "room": "Bedroom 4",
+            "method": "ai_outline_snapped",
+            "area_m2": 18.82,
+            "printed_names": [
+              "BEDROOM 4"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_7aae69cf3625a53121",
+            "room": "Master Bedroom",
+            "method": "ai_outline_snapped",
+            "area_m2": 23.21,
+            "printed_names": [
+              "MASTER BEDROOM"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_15c0e4aacc86b72342",
+            "room": "R O B E",
+            "method": "ai_outline_snapped",
+            "area_m2": 2.93,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_e942aff5694d5ff90b",
+            "room": "Study nook",
+            "method": "ai_outline_snapped",
+            "area_m2": 4.28,
+            "printed_names": [
+              "S T U D Y N OOK"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_073f7019e5dddd04f0",
+            "room": "Walk in robe",
+            "method": "ai_outline_snapped",
+            "area_m2": 16.05,
+            "printed_names": [
+              "WAL K I N R O B E"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          }
+        ]
+      },
+      {
+        "page": 25,
+        "level": "Basement",
+        "printed_names": [
+          {
+            "name": "CELLAR",
+            "x": 1698.8094347242513,
+            "y": 1165.507189954223
+          }
+        ],
+        "names_without_position": [
+          "Family",
+          "Storage"
+        ],
+        "untraced_names": [],
+        "traces": [
+          {
+            "trace_id": "ai_room_trace_f890da8b1f12fcaf98",
+            "room": "Cellar (1)",
+            "method": "enclosed_walls",
+            "area_m2": 27.09,
+            "printed_names": [
+              "CELLAR"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_e91edf131db7e31277",
+            "room": "Cellar (2)",
+            "method": "enclosed_walls",
+            "area_m2": 3.83,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          }
+        ]
+      }
+    ]
+  },
+  "eval_window_placement": {
+    "schedule": 28,
+    "placed": 0,
+    "tags": 23,
+    "reasons": {
+      "no outside wall within 3000 mm of the tag": 23,
+      "schedule window without a matched traced wall": 7
+    },
+    "openings": [],
+    "unplaced": [
+      {
+        "mark": "W28",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W10",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W09",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W07",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W06",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W05",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W04",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W03",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W02",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W01",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W25",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W26",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W09",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W24",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W2",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W20",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W17",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W14",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W19",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W18",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W16",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W15",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W23",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W08",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W11",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W12",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W13",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W21",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W22",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W27",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      }
+    ],
+    "tags_found": [
+      {
+        "mark": "W28",
+        "x": 1030.549817311542,
+        "y": 256.3527747311859,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W10",
+        "x": 656.9020110934104,
+        "y": 311.4008935082556,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W09",
+        "x": 558.8227994683521,
+        "y": 385.1020525329033,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W07",
+        "x": 417.0904936532156,
+        "y": 676.5036812888409,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W06",
+        "x": 463.86259457316,
+        "y": 676.5036812888409,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W05",
+        "x": 528.7757346359401,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W04",
+        "x": 581.499848398515,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W03",
+        "x": 736.5551829606884,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W02",
+        "x": 789.280296725421,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W01",
+        "x": 899.2645340378976,
+        "y": 687.4307048660289,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W25",
+        "x": 745.7452027899513,
+        "y": 348.58097373154163,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W26",
+        "x": 842.9744125809648,
+        "y": 348.58097373154163,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W09",
+        "x": 557.8087972804443,
+        "y": 386.3140551480357,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W24",
+        "x": 646.3909884138257,
+        "y": 375.7940324490316,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W2",
+        "x": 463.16846342593647,
+        "y": 420.43512877091797,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W20",
+        "x": 432.95852789159926,
+        "y": 680.5586900383146,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W17",
+        "x": 658.0140134927727,
+        "y": 682.8186949147166,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W14",
+        "x": 874.5974808139118,
+        "y": 689.0627083873951,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W19",
+        "x": 527.7617324480324,
+        "y": 726.5487892709375,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W18",
+        "x": 580.4858462106072,
+        "y": 726.2007885200578,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W16",
+        "x": 735.5411807727806,
+        "y": 727.3217909388395,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W15",
+        "x": 788.7032954804281,
+        "y": 727.3217909388395,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W23",
+        "x": 464.83159666397125,
+        "y": 420.4351287709173,
+        "page": 9,
+        "level": "First Floor"
+      }
+    ]
+  }
+}

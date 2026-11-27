@@ -1,0 +1,594 @@
+# Uncommitted work from worktree /Users/jeremyzheng/.codex/worktrees/set17-fixes (branch set17-fixes), base commit 4bb692b5192bbe5307b04e3f72b5441026c184bc
+# Restore: git worktree add <dir> 4bb692b5192bbe5307b04e3f72b5441026c184bc && cd <dir> && git apply <this file>
+diff --git a/ai/ai_preliminary.py b/ai/ai_preliminary.py
+index 4f1036e..317aa39 100644
+--- a/ai/ai_preliminary.py
++++ b/ai/ai_preliminary.py
+@@ -1527,6 +1527,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
+                     "owner_room_id": target["room"].get("room_id", ""),
+                     "owner_zone_id": target["room"].get("zone_id", ""),
+                     "gross_area_m2": surface.get("gross_area_m2"),
++                    "glazing_only_host": surface.get("glazing_only_host") is True,
+                     "net_opaque_area_m2": surface.get("net_opaque_area_m2"),
+                     "opening_coverage_status": surface.get("opening_coverage", "not_applicable"),
+                     "linked_opening_ids": [opening.get("candidate_id") for opening in effective_proposal.get("openings", [])
+@@ -1581,6 +1582,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
+                 "owner_room_id": owner_id,
+                 "owner_zone_id": room_rows.get(_room_identity(owner["name"], owner["level"]), {}).get("room", {}).get("zone_id", "") if owner else "",
+                 "gross_area_m2": candidate.get("gross_area_m2"),
++                "glazing_only_host": candidate.get("glazing_only_host") is True,
+                 "net_opaque_area_m2": candidate.get("net_opaque_area_m2"),
+                 "opening_coverage": candidate.get("opening_coverage", "not_applicable"),
+                 "opening_ids": [item.get("candidate_id") for item in effective_proposal.get("openings", []) if isinstance(item, dict) and item.get("host_surface_key") in {candidate.get("surface_key"), candidate.get("candidate_id")}],
+@@ -1678,7 +1680,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
+         if openings:
+             net = gross - sum(item["opening_area_m2"] for item in openings)
+         net = net if net is not None else gross
+-        if net <= 0:
++        glazing_only = candidate.get("glazing_only_host") is True and bool(openings)
++        if net <= 0 and not glazing_only:
+             surface_summary["blocked"] += 1
+             exclusions.append({"room_id": room["room_id"], "component": "opaque envelope", "candidate_id": candidate["candidate_id"], "reason": "Net opaque area is not positive after opening coverage."})
+             continue
+@@ -1799,17 +1802,18 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
+                            "boundary_source": source})
+         opaque["area_derivation"] = deepcopy(opaque_by_id.get(candidate["candidate_id"], {}).get("area_derivation", {}))
+         opaque["opaque_resolution_fingerprint"] = opaque_by_id.get(candidate["candidate_id"], {}).get("resolution_fingerprint", "")
+-        room["cooling_load"]["envelope_not_applicable"] = False
+-        room["cooling_load"]["envelope_surfaces"].append(opaque)
+-        accepted_surface_ids.add(candidate["candidate_id"])
+-        surface_summary["included"] += 1
+-        exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "opaque envelope" and "No structurally valid" in item.get("reason", ""))]
+-        ledger.append({"room_id": room["room_id"], "field": "envelope_surface", "value": net, "origin": "ai_geometry", "profile_id": profile_id,
+-                       "confidence": candidate["confidence"], "confidence_band": candidate["confidence_band"],
+-                       "rationale": candidate.get("rationale", "AI preliminary external surface; controlled profile U-value and solar basis."),
+-                       "evidence": candidate["evidence"], "surface_id": candidate["candidate_id"],
+-                       "reviewer_trace_id": candidate.get("reviewer_trace_id", ""),
+-                       "reviewer": candidate.get("reviewer", "")})
++        if not glazing_only:
++            room["cooling_load"]["envelope_not_applicable"] = False
++            room["cooling_load"]["envelope_surfaces"].append(opaque)
++            accepted_surface_ids.add(candidate["candidate_id"])
++            surface_summary["included"] += 1
++            exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "opaque envelope" and "No structurally valid" in item.get("reason", ""))]
++            ledger.append({"room_id": room["room_id"], "field": "envelope_surface", "value": net, "origin": "ai_geometry", "profile_id": profile_id,
++                           "confidence": candidate["confidence"], "confidence_band": candidate["confidence_band"],
++                           "rationale": candidate.get("rationale", "AI preliminary external surface; controlled profile U-value and solar basis."),
++                           "evidence": candidate["evidence"], "surface_id": candidate["candidate_id"],
++                           "reviewer_trace_id": candidate.get("reviewer_trace_id", ""),
++                           "reviewer": candidate.get("reviewer", "")})
+         for opening in openings:
+             shade = envelope["shading_categories"][opening["shading_category"]]
+             opening_orientation = opening.get("orientation") if opening.get("orientation") in CARDINALS else orientation if orientation in CARDINALS else ""
+diff --git a/ai/construction_u_values.py b/ai/construction_u_values.py
+index 3cdc758..9eac270 100644
+--- a/ai/construction_u_values.py
++++ b/ai/construction_u_values.py
+@@ -12,6 +12,7 @@ pack's preliminary U-value and the Results tab lists it as typical. No I/O excep
+ 
+ import json
+ import os
++import re
+ from pathlib import Path
+ 
+ DEFAULT_TABLE_PATH = Path.home() / ".archie" / "airah_handbook_2007_u_values.json"
+@@ -20,6 +21,28 @@ SOURCE = "AIRAH Technical Handbook, 4th edition (2007), Overall heat transfer co
+ # The handbook's tables that hold each kind of surface.
+ SECTIONS = {"wall": ("Masonry walls", "Frame walls", "Sandwich panel walls"), "roof": ("Flat roofs", "Pitched roofs")}
+ U_RANGE = (0.1, 7.0)       # W/m²K
++PLAN_WALL_TYPES = (("dincel", "Dincel wall"), ("brick cavity", "Brick cavity wall"),
++                   ("stud wall", "Stud wall"))
++
++
++def plan_wall_legend(spatial, inventory):
++    """Cite construction names printed on plan pages; no U-value or wall ownership is inferred."""
++    pages = inventory.get("pages", {}) if isinstance(inventory, dict) else {}
++    found = []
++    for page in spatial.get("pages", []) if isinstance(spatial, dict) else []:
++        number = page.get("page")
++        meta = pages.get(str(number), {})
++        if not isinstance(meta, dict) or not any(word in (str(meta.get("page_type") or "") + " " + str(meta.get("title") or "")).casefold()
++                                               for word in ("plan", "wall", "schedule")):
++            continue
++        lines = [str(item.get("text") or "") for item in page.get("standalone_text_items", []) if isinstance(item, dict)]
++        text = re.sub(r"[+/_-]+", " ", " ".join(lines).casefold())
++        for phrase, label in PLAN_WALL_TYPES:
++            pattern = r"\b" + (r"stud(?:\s+wall)?" if phrase == "stud wall" else re.escape(phrase)) + r"\b"
++            if re.search(pattern, text):
++                found.append({"page": number, "construction": label, "source": "drawing text",
++                              "status": "needs_review", "note": "Match this legend to a specific wall and a cited U-value."})
++    return sorted(found, key=lambda row: (row["page"], row["construction"]))
+ 
+ 
+ def table_path():
+diff --git a/ai/thermal_surface_resolution.py b/ai/thermal_surface_resolution.py
+index e0a143d..b5db0b8 100644
+--- a/ai/thermal_surface_resolution.py
++++ b/ai/thermal_surface_resolution.py
+@@ -212,6 +212,9 @@ def _resolve_surface_area(row, openings, ceiling_by_room=None, allow_incomplete_
+         return gross, None, derivation, ["opening_geometry_missing:" + ",".join(sorted(missing))]
+     opening_total = sum(item["opening_area_m2"] for item in area_rows)
+     net = gross - opening_total
++    if net == 0 and row.get("glazing_only_host") is True:
++        return gross, 0.0, {**derivation, "gross_area_m2": gross, "net_area_m2": 0.0,
++                            "openings": area_rows, "formula": "glazing-only host; no opaque area"}, []
+     if net <= 0:
+         return gross, None, derivation, ["opening_area_exceeds_gross_area"]
+     return gross, net, {**derivation, "gross_area_m2": gross, "net_area_m2": net, "openings": area_rows,
+diff --git a/backend/ai_preliminary_service.py b/backend/ai_preliminary_service.py
+index 4021bb8..0b7b8b0 100644
+--- a/backend/ai_preliminary_service.py
++++ b/backend/ai_preliminary_service.py
+@@ -2040,6 +2040,33 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
+             "remediation": "Trace and calibrate the room, then accept its area in the calculator draft.",
+         })
+     proposal["rooms"] = calculation_rooms
++    # A scheduled house window can contribute draft glass load when its room
++    # is known but no wall outline was proved. This host has no opaque area.
++    house_windows = _read(paths["root"] / "house_windows.json", {})
++    for window in house_windows.get("assigned_without_wall", []):
++        owner = next((room for room in calculation_rooms if room.get("label", "").casefold() == str(window.get("room", "")).casefold()
++                      and room.get("level_name", "").casefold() == str(window.get("level_name", "")).casefold()
++                      and str(room.get("space_scope", "")).startswith("comfort_hvac")), None)
++        height = (window.get("head_height_m") or 0) - (window.get("sill_height_m") or 0)
++        if owner is None or height <= 0 or not isinstance(window.get("width_m"), (int, float)):
++            continue
++        area = window["width_m"] * height
++        host = f"house-untraced:{window['page']}:{window['mark']}:{owner['room_id']}"
++        citation = {"page": window["page"], "excerpt": window.get("evidence", ""),
++                    "reference": "Window schedule and nearest printed room label"}
++        proposal.setdefault("surfaces", []).append({"surface_key": host, "label": f"{owner['label']} window-only host",
++            "owner_room_label": owner["label"], "owner_level_name": owner["level_name"],
++            "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
++            "gross_area_m2": area, "opening_coverage": "complete", "glazing_only_host": True,
++            "page": window["page"], "evidence": [citation], "confidence": 0.35,
++            "verification_status": "provisional", "rationale": "Room assigned by plan-label proximity; wall and azimuth unresolved."})
++        proposal.setdefault("openings", []).append({"opening_key": host + ":glass", "label": f"{owner['label']} window {window['mark']}",
++            "owner_room_label": owner["label"], "owner_level_name": owner["level_name"],
++            "host_surface_key": host, "width_m": window["width_m"], "height_m": height,
++            "opening_area_m2": area, "quantity": 1, "external_exposure": "external", "orientation": "",
++            "shading_category": "unshaded", "glazing_choice": "residential", "preliminary_profile_id": "residential",
++            "page": window["schedule_page"], "evidence": [citation], "confidence": 0.35,
++            "verification_status": "provisional", "assumptions": window.get("assumptions", [])})
+     proposal.setdefault("issues", []).extend(area_issues)
+     if trace_review_issue:
+         proposal["issues"].append(trace_review_issue)
+@@ -2599,13 +2626,15 @@ def _attach_house_window_coverage(paths, report):
+     window_state = _read(paths["root"] / "house_windows.json", {})
+     scheduled = int(window_state.get("windows_in_schedule") or 0)
+     placed = len(window_state.get("placed") or [])
++    assigned = len(window_state.get("assigned_without_wall") or [])
+     unplaced = len(window_state.get("unplaced") or [])
+     status = window_state.get("coverage_status") or "unresolved"
+     report["glazing_coverage"] = {"status": status, "scheduled": scheduled,
+-                                  "placed": placed, "unplaced": unplaced}
++                                  "placed": placed, "assigned_without_wall": assigned, "unplaced": unplaced}
+     if status != "placed":
+-        message = (f"Glazing coverage is incomplete: {scheduled} scheduled windows, {placed} placed, "
+-                   f"{unplaced} placement issues. The reported load is an included-scope subtotal.")
++        message = (f"Glazing coverage is incomplete: {scheduled} scheduled windows, {placed} placed on walls, "
++                   f"{assigned} assigned to rooms without wall outlines, {unplaced} placement issues. "
++                   "The reported load is an included-scope subtotal.")
+         report.setdefault("warnings", []).append(message)
+         report.setdefault("known_exclusions", []).append({"component_type": "glazing and solar",
+             "component": "unmatched scheduled windows", "reason": message})
+diff --git a/backend/drawing_tasks_service.py b/backend/drawing_tasks_service.py
+index 6d6a346..540aa8f 100644
+--- a/backend/drawing_tasks_service.py
++++ b/backend/drawing_tasks_service.py
+@@ -22,6 +22,7 @@ Every call is logged in the job's ai_usage.jsonl under "drawing:<task>" with its
+ import json
+ import hashlib
+ import re
++import tempfile
+ from datetime import datetime
+ from pathlib import Path
+ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+@@ -34,7 +35,7 @@ from backend.job_runner import BackgroundJob, now, read_json, write_json, checkp
+ JOB_FILE = "drawing_tasks_job.json"
+ STEPS = [("build", "Preparing the drawing tasks"), ("answer", "The AI is answering the drawing tasks"),
+          ("skills", "Starting the skills")]
+-MAX_ROUNDS = 8          # scale -> names -> outlines -> walls/openings -> kitchen: five stages, with room to spare
++MAX_ROUNDS = 16         # a successful retry can unlock several further rounds without another click
+ MAX_ATTEMPTS = 2        # a refused reply is tried once more, told why it was refused
+ # Connection failures on this many calls in a row mean the connection itself is broken (on Butcher Buffet,
+ # 2026-10-17, all 24 calls failed the same way): the run stops calling instead of spending a call on every task.
+@@ -189,6 +190,20 @@ def _sizes(paths):
+     return sizes
+ 
+ 
++def _retry_smaller_tenancy(provider, prompt, images):
++    """One smaller-image retry; the original coordinate grid still maps to the same plan."""
++    with tempfile.TemporaryDirectory(prefix="archie-tenancy-retry-") as folder:
++        smaller = []
++        for index, path in enumerate(images):
++            target = Path(folder) / f"image-{index}.png"
++            with Image.open(path) as opened:
++                image = opened.copy()
++                image.thumbnail((1024, 1024))
++                image.save(target)
++            smaller.append(str(target))
++        return provider.propose(prompt, image_paths=smaller)
++
++
+ # Tasks whose coordinates are always on the first image; the images after it are only for reading (e.g. the sheets
+ # that print the room names for the outline task).
+ FIRST_IMAGE_TASKS = {"P0_room_outlines"}
+@@ -286,7 +301,12 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
+             _context.check = check
+             try:
+                 checkpoint()
+-                reply, raw = provider.propose(prompt, image_paths=images)
++                try:
++                    reply, raw = provider.propose(prompt, image_paths=images)
++                except ai_provider.ProviderTimeout:
++                    if record["task"] != "P0_tenancy_outline" or not images:
++                        raise
++                    reply, raw = _retry_smaller_tenancy(provider, prompt, images)
+                 _write_json(cached_path, {"reply": reply, "raw": raw})
+                 return {"record": record, "reply": reply, "raw": raw, "provider": provider,
+                         "images": images, "sizes": sizes, "key": key, "cached": False}
+@@ -340,6 +360,15 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
+             if result.get("error"):
+                 error = result["error"]
+                 calls += 1
++                if record["task"] == "P0_tenancy_outline" and isinstance(error, ai_provider.ProviderTimeout):
++                    current = autonomous_tasks_service._current_task(root, record["task"], record["target"])
++                    if current and current.get("run_id") == record["run_id"]:
++                        current.update(status="below_accuracy_bar", source="timeout_fallback",
++                            applied_value={"note": "Whole-floor outline timed out at both image sizes; room-specific area routes continue without tenancy clipping."},
++                            block_reason="The whole-floor outline could not be read within the provider limit.", finished_at=now())
++                        autonomous_tasks_service._write(autonomous_tasks_service._record_file(root, current), current)
++                        refused += 1
++                        continue
+                 if isinstance(error, ai_provider.InvalidProviderReply):
+                     archive_investigation_failure(project, record, error, model_note="Drawing task")
+                     refused += 1
+diff --git a/backend/equipment_catalogue_service.py b/backend/equipment_catalogue_service.py
+index a895733..4af2a43 100644
+--- a/backend/equipment_catalogue_service.py
++++ b/backend/equipment_catalogue_service.py
+@@ -97,6 +97,8 @@ def _named_room(value, room_names):
+ # Customer-facing buffet and servery stations belong to the dining or shop area the customers use (user rule 2026-10-18,
+ # first for room areas; for equipment 2026-10-26, after Butcher Buffet's buffet stations were placed in its Bar).
+ BUFFET_LOCATION = re.compile(r"\b(?:buffet|servery|salad\s+bar|food\s+station|hot\s+food|bain[\s-]?marie|carvery)\b", re.I)
++HOUSE_SYSTEM_EQUIPMENT = re.compile(r"\b(?:air[ -]?condition(?:er|ing)?|a\.?c\.?|pool\s+pump|hot[ -]?water|hws)\b", re.I)
++ONE_LETTER_TAG = re.compile(r"^[A-Za-z](?:\s*[x×]\s*\d+)?$", re.I)
+ 
+ 
+ def _buffet_room(root, room_names):
+@@ -166,7 +168,7 @@ def _hood_heat(row, under_hood, notes):
+ 
+ 
+ def _resolve(row, decision, book, typical, assessment, evidence, room_names, duplicates, catalogue_hash, zones=None,
+-             buffet_room=""):
++             buffet_room="", dwelling=False):
+     value = deepcopy(decision.get("value") or row.get("value") or {})
+     name = value.get("name", "Equipment")
+     out = {"id": row["id"], "name": name, "value": value, "pages": row.get("pages", []),
+@@ -174,6 +176,9 @@ def _resolve(row, decision, book, typical, assessment, evidence, room_names, dup
+            "applicability_evidence": {}, "room": "", "quantity": None, "candidates": []}
+     if decision.get("status") == "rejected":
+         return {**out, "status": "excluded", "label": LABELS["excluded"], "note": "Rejected by the operator."}
++    if dwelling and (HOUSE_SYSTEM_EQUIPMENT.search(str(name)) or ONE_LETTER_TAG.fullmatch(str(name).strip())):
++        return {**out, "status": "excluded", "label": LABELS["excluded"],
++                "note": "House service equipment or an unidentified one-letter tag; no room equipment heat assigned."}
+     kind = equipment_heat.equipment_type(name)
+     out["kind"] = kind
+     component = any(word in str(name).casefold() for word in ("condenser", "compressor", "evaporator", "controller", "control system"))
+@@ -300,7 +305,7 @@ def resolve(project, room_names, *, assess=None, locate=None, persist=False):
+     typical = catalogue.load_typical()
+     catalogue_hash = catalogue.current_hash(book, typical)
+     inputs = _inputs(project, room_names)
+-    source_hash = fingerprint({"version": 2, "catalogue": catalogue_hash, "inputs": inputs})
++    source_hash = fingerprint({"version": 3, "catalogue": catalogue_hash, "inputs": inputs})
+     root = Path(project["review_dir"])
+     saved = read_json(root / ARTIFACT)
+     assessments = dict(saved.get("assessments", {}) if saved.get("source_hash") == source_hash else {})
+@@ -353,8 +358,10 @@ def resolve(project, room_names, *, assess=None, locate=None, persist=False):
+                 provider_error = _provider_error(error)
+                 break
+     buffet_room = _buffet_room(root, room_names)
++    from backend.house_windows_service import is_dwelling
++    dwelling = is_dwelling(root)
+     records = [_resolve(row, decisions.get(row["id"], {}), book, typical, assessments.get(row["id"], {}),
+-                        evidence, room_names, duplicates, catalogue_hash, zones, buffet_room) for row in findings]
++                        evidence, room_names, duplicates, catalogue_hash, zones, buffet_room, dwelling) for row in findings]
+     summary = {state: sum(row["status"] == state for row in records) for state in STATUSES}
+     reading_complete = bool(inputs["result"].get("run") and not inputs["result"].get("failures")
+                             and inputs.get("reading_job", {}).get("status") not in {"running", "queued", "stopping"})
+diff --git a/backend/house_windows_service.py b/backend/house_windows_service.py
+index eb81427..233ff71 100644
+--- a/backend/house_windows_service.py
++++ b/backend/house_windows_service.py
+@@ -18,7 +18,7 @@ from backend import reviewer_room_geometry_service
+ from backend.job_runner import read_json
+ 
+ RESULT_FILE = "house_windows.json"
+-VERSION = "house-windows-text-v4"
++VERSION = "house-windows-text-v7"
+ REVIEWER = "Archie drawing text (windows)"
+ GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
+ SHADING = "unshaded"
+@@ -33,6 +33,26 @@ def _same_plan_level(trace, plan_levels):
+     return not expected or not actual or expected == actual
+ 
+ 
++def _untraced_labels(spatial_page, level, traced_ids):
++    """Cited plan labels that can own a provisional scheduled window."""
++    from ai import room_inference
++    from ai import room_use_resolution
++    items = spatial_page.get("standalone_text_items") or spatial_page.get("word_samples") or []
++    in_title = room_inference.title_block_test(spatial_page, items)
++    labels = []
++    for text, bbox in room_inference._text_item_lines(items):
++        if in_title({"bbox": bbox}):
++            continue
++        label, _, _ = room_inference.parse_room_label_item(text)
++        if not label or room_use_resolution.room_identity(label, level) in traced_ids:
++            continue
++        eligible = not bool(set(room_use_resolution._house_label_matches(label)) &
++                            {"outdoor", "garage", "house_wet", "house_service"})
++        labels.append({"label": label, "level_name": level, "x": (bbox[0] + bbox[2]) / 2,
++                       "y": (bbox[1] + bbox[3]) / 2, "excerpt": text, "eligible": eligible})
++    return labels
++
++
+ def _fingerprint(value):
+     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+ 
+@@ -101,13 +121,14 @@ def apply(web, project, root, read_page=None):
+               and _same_plan_level(row, plan_levels)]
+     systems = {page.get("page"): page.get("coordinate_systems", {}).get("image_px", {})
+                for page in read_json(root / "vector_geometry.json").get("geometry_key_points", {}).get("pages", [])}
++    spatial_pages = {page.get("page"): page for page in read_json(root / "spatial_ocr.json").get("pages", [])}
+     source = read_json(root / "ai_input.json").get("source_pdf")
+     schedule_pages = _schedule_pages(root)
+     inputs = {"version": VERSION, "pdf": str(source), "schedule_pages": schedule_pages,
+               "plan_levels": plan_levels,
+               "traces": [{key: row.get(key) for key in ("trace_id", "room_id", "page", "points_image_px", "calibration")}
+                          for row in cooled],
+-              "scopes": scopes}
++              "scopes": scopes, "spatial_fingerprint": _fingerprint(spatial_pages)}
+     if source and Path(source).exists():
+         stat = Path(source).stat()
+         inputs["pdf_version"] = [stat.st_size, stat.st_mtime_ns]
+@@ -117,7 +138,7 @@ def apply(web, project, root, read_page=None):
+         return saved
+     result = {"schema_version": 1, "version": VERSION, "fingerprint": fingerprint, "schedule_pages": schedule_pages,
+               "windows_in_schedule": 0, "skylights": [], "doors_not_counted": [], "unread_schedule_rows": [],
+-              "placed": [], "unplaced": [], "walls_taken_as_outside": [],
++              "placed": [], "assigned_without_wall": [], "unplaced": [], "walls_taken_as_outside": [],
+               "invalid_traces": [{"room": row.get("room_label"), "page": row.get("page"),
+                                   "level_name": row.get("level_name"), "plan_level": plan_levels.get(row.get("page")),
+                                   "reason": "Room trace is assigned to a different level than its plan page."}
+@@ -157,7 +178,7 @@ def apply(web, project, root, read_page=None):
+                 result["unplaced"].append({"page": page, "reason": "No image frame for this plan page; its windows weren't placed."})
+                 continue
+             sx, sy = system["image_width"] / width_pt, system["image_height"] / height_pt
+-            level = traces[0].get("level_name") or None
++            level = plan_levels.get(page) or traces[0].get("level_name") or None
+             tags = house_windows.find_window_tags(words, page, level)
+             rooms, scale = [], None
+             for trace in traces:
+@@ -167,6 +188,32 @@ def apply(web, project, root, read_page=None):
+                               "outside_edges": _outside_edges(trace, records, mm_per_px)})
+             placed = house_windows.place_windows(tags, windows, rooms, scale)
+             result["unplaced"] += placed["unplaced"]
++            traced_ids = {trace.get("room_id") for trace in records if trace.get("page") == page}
++            labels = _untraced_labels(spatial_pages.get(page, {}), level or plan_levels.get(page) or "Unassigned level", traced_ids)
++            placed_marks = {row["mark"].upper() for row in placed["openings"]}
++            for tag in tags:
++                if tag["mark"].upper() in placed_marks:
++                    continue
++                matching = [row for row in windows if row["mark"].upper() == tag["mark"].upper()]
++                if len({(row["width_mm"], row["height_mm"]) for row in matching}) != 1 or not matching or not labels:
++                    continue
++                nearest = sorted(labels, key=lambda row: math.dist((tag["x"], tag["y"]), (row["x"], row["y"])))
++                if not nearest[0]["eligible"]:
++                    continue
++                distance_mm = math.dist((tag["x"], tag["y"]), (nearest[0]["x"], nearest[0]["y"])) * scale
++                if distance_mm > 9000 or (len(nearest) > 1 and
++                    (math.dist((tag["x"], tag["y"]), (nearest[1]["x"], nearest[1]["y"])) * scale - distance_mm) < 500):
++                    continue
++                sill, head, note = house_windows.sill_and_head(matching[0])
++                result["assigned_without_wall"].append({"mark": tag["mark"], "page": page,
++                    "room": nearest[0]["label"], "level_name": nearest[0]["level_name"],
++                    "schedule_page": matching[0]["page"], "width_m": matching[0]["width_mm"] / 1000,
++                    "sill_height_m": sill / 1000, "head_height_m": head / 1000,
++                    "frame_group": house_windows.frame_group(matching[0].get("type") or ""),
++                    "assumptions": ["Nearest printed room label on the same plan; no host wall or azimuth was established.",
++                                    *([note] if note else [])],
++                    "evidence": f"Window schedule p{matching[0]['page']}: {matching[0]['evidence']}; "
++                                f"plan p{page}: {nearest[0]['excerpt']}"})
+             by_trace = {}
+             for opening in placed["openings"]:
+                 by_trace.setdefault(opening["trace_id"], []).append(opening)
+@@ -218,10 +265,22 @@ def apply(web, project, root, read_page=None):
+         if close:
+             close()
+     placed_marks = {str(row.get("mark", "")).upper() for row in result["placed"]}
++    assigned_counts = {}
++    for row in result["assigned_without_wall"]:
++        mark = row["mark"].upper()
++        assigned_counts[mark] = assigned_counts.get(mark, 0) + 1
++    conflicted = {mark for mark, count in assigned_counts.items() if count > 1 or mark in placed_marks}
++    if conflicted:
++        result["assigned_without_wall"] = [row for row in result["assigned_without_wall"]
++                                            if row["mark"].upper() not in conflicted]
++        result["unplaced"] += [{"mark": mark, "reason": "Window tag has competing room or wall placements across plan pages."}
++                                for mark in sorted(conflicted)]
++    assigned_marks = {row["mark"].upper() for row in result["assigned_without_wall"]}
++    result["unplaced"] = [row for row in result["unplaced"] if str(row.get("mark", "")).upper() not in assigned_marks]
+     unplaced_marks = {str(row.get("mark", "")).upper() for row in result["unplaced"]}
+     for window in windows:
+         mark = str(window.get("mark", "")).upper()
+-        if mark and mark not in placed_marks and mark not in unplaced_marks:
++        if mark and mark not in placed_marks and mark not in assigned_marks and mark not in unplaced_marks:
+             result["unplaced"].append({"mark": window["mark"], "page": window["page"],
+                 "reason": "Window is listed in the schedule but is not matched to a traced room wall."})
+             unplaced_marks.add(mark)
+@@ -229,6 +288,7 @@ def apply(web, project, root, read_page=None):
+         from backend.phase1_supervisor_service import _build_calculation_evidence
+         _build_calculation_evidence(web, project)
+     result["coverage_status"] = ("unresolved" if not result["windows_in_schedule"] else
+-                                 "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else "placed")
++                                 "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else
++                                 "provisional" if result["assigned_without_wall"] else "placed")
+     reviewer_room_geometry_service._atomic_json(root / RESULT_FILE, result)
+     return result
+diff --git a/backend/need_answers_service.py b/backend/need_answers_service.py
+index 30f80bd..b18a5a6 100644
+--- a/backend/need_answers_service.py
++++ b/backend/need_answers_service.py
+@@ -84,13 +84,18 @@ def options(web, project):
+                      for row in current.get("findings", [])]
+     except Exception:
+         equipment = []
++    from ai import construction_u_values
++    root = Path(project["review_dir"])
++    from backend.job_runner import read_json
++    observed_walls = construction_u_values.plan_wall_legend(
++        read_json(root / "spatial_ocr.json"), read_json(root / "page_inventory.json"))
+     return {"kinds": [{"id": key, "label": label, "applied": key in APPLIED_KINDS, "unit": APPLIED_KINDS.get(key, {}).get("unit", "")}
+                       for key, label in KINDS.items()],
+             "rooms": [{"label": label, "level": level} for label, level in room_rows],
+             "equipment": equipment,
+             "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key],
+             "exhaust_methods": [{"id": key, "label": label} for key, label in EXHAUST_METHODS.items()],
+-            "constructions": _construction_choices()}
++            "constructions": _construction_choices(), "observed_wall_constructions": observed_walls}
+ 
+ 
+ def _construction_choices():
+diff --git a/tests/test_ai_preliminary.py b/tests/test_ai_preliminary.py
+index 2dcb04d..784c40f 100644
+--- a/tests/test_ai_preliminary.py
++++ b/tests/test_ai_preliminary.py
+@@ -177,6 +177,12 @@ def main():
+     prelim_room = preliminary_envelope["material"]["hourly_load_model"]["rooms"][0]
+     check("proposal external wall and glazing materialize only in the preliminary model", len(prelim_room["cooling_load"]["envelope_surfaces"]) == 1 and len(prelim_room["cooling_load"]["glazing_surfaces"]) == 1)
+     check("complete opening coverage subtracts opening area once", prelim_room["cooling_load"]["envelope_surfaces"][0]["area_m2"] == 22)
++    window_only = deepcopy(proposal)
++    window_only["surfaces"][0].update({"gross_area_m2": 8, "glazing_only_host": True, "orientation": ""})
++    window_only["openings"][0].update({"orientation": "", "shading_category": "unshaded"})
++    provisional_window = assemble({"spaces": []}, preliminary_proposal=window_only)["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]
++    check("untraced scheduled window adds glass without inventing opaque wall area",
++          len(provisional_window["glazing_surfaces"]) == 1 and not provisional_window["envelope_surfaces"])
+     envelope_report = calculate(preliminary_envelope)
+     peak_components = envelope_report["included_scope_peak"]["components"]
+     check("preliminary report keeps opaque and glazing solar components separate", "envelope" in peak_components and "glazing_conduction" in peak_components and "glazing_solar" in peak_components)
+diff --git a/tests/test_construction_u_values.py b/tests/test_construction_u_values.py
+index 5281f8e..a5009dc 100644
+--- a/tests/test_construction_u_values.py
++++ b/tests/test_construction_u_values.py
+@@ -46,6 +46,15 @@ TABLE = {"source": "Test table", "constructions": [
+ 
+ 
+ class ImportTests(unittest.TestCase):
++    def test_plan_wall_legend_is_cited_without_inventing_a_u_value(self):
++        spatial = {"pages": [{"page": 25, "standalone_text_items": [
++            {"text": "Dincel 200"}, {"text": "Brick cavity wall"}, {"text": "Stud wall"}]}]}
++        inventory = {"pages": {"25": {"page_type": "floor_plan", "title": "First Floor Plan"}}}
++        rows = construction_u_values.plan_wall_legend(spatial, inventory)
++        self.assertEqual({row["construction"] for row in rows},
++                         {"Dincel wall", "Brick cavity wall", "Stud wall"})
++        self.assertTrue(all(row["page"] == 25 and "u_value_w_m2k" not in row for row in rows))
++
+     def test_the_importer_reads_constructions_variants_and_summer_values_and_skips_notes(self):
+         rows = importer.parse(TEXT)
+         self.assertEqual([(row["section"], row["name"], row["u_value_w_m2k"]) for row in rows], [
+diff --git a/tests/test_drawing_tasks.py b/tests/test_drawing_tasks.py
+index 6d150cd..7d477e8 100644
+--- a/tests/test_drawing_tasks.py
++++ b/tests/test_drawing_tasks.py
+@@ -93,6 +93,20 @@ class BatchTasks(FakeTasks):
+ 
+ 
+ class DrawingTaskTests(unittest.TestCase):
++    def test_tenancy_timeout_retry_uses_smaller_image(self):
++        from PIL import Image
++        with tempfile.TemporaryDirectory() as folder:
++            image = Path(folder) / "large.png"
++            Image.new("RGB", (2200, 1600), "white").save(image)
++            class Provider:
++                def propose(self, prompt, image_paths):
++                    with Image.open(image_paths[0]) as opened:
++                        self.size = opened.size
++                    return {"points": []}, {}
++            provider = Provider()
++            drawing._retry_smaller_tenancy(provider, "outline", [str(image)])
++            self.assertLessEqual(max(provider.size), 1024)
++
+     def test_round_fetches_in_parallel_applies_in_order_and_rebuilds_once(self):
+         with tempfile.TemporaryDirectory() as folder:
+             fake = BatchTasks(folder)
+diff --git a/tests/test_equipment_catalogue.py b/tests/test_equipment_catalogue.py
+index 1913d44..ffb5833 100644
+--- a/tests/test_equipment_catalogue.py
++++ b/tests/test_equipment_catalogue.py
+@@ -46,6 +46,18 @@ PATTERNS = [{"id": "CONTINUOUS", "description": "On around the clock", "basis":
+             {"id": "WHILE_OPEN", "description": "While open", "basis": "ROOM_HOURS", "fraction": None}]
+ 
+ 
++class HouseEquipmentScopeTests(unittest.TestCase):
++    def test_house_services_and_unknown_tag_do_not_get_room_heat(self):
++        for name in ("AC x2", "Pool pump", "Outdoor hot-water unit", "F x2"):
++            with self.subTest(name=name):
++                row = {"id": name, "value": {"name": name}, "pages": []}
++                result = service._resolve(row, {}, {}, {}, {}, {}, ["Kitchen"], set(), "", dwelling=True)
++                self.assertEqual(result["status"], "excluded")
++
++    def test_house_service_name_rule_does_not_match_a_mixer(self):
++        self.assertIsNone(service.HOUSE_SYSTEM_EQUIPMENT.search("Planetary mixer"))
++
++
+ def typical_workbook(path, rows=TYPICAL_ROWS, patterns=PATTERNS):
+     w = Workbook(); s = w.active; s.title = "Typical values"
+     s.append(["Instructions above the header are ignored."]); s.append(list(cat.TYPICAL_HEADERS.values()))
+diff --git a/tests/test_house_windows_service.py b/tests/test_house_windows_service.py
+index 2633d4c..e45f2e5 100644
+--- a/tests/test_house_windows_service.py
++++ b/tests/test_house_windows_service.py
+@@ -47,6 +47,32 @@ def read_page(number):
+ 
+ 
+ class HouseWindowsServiceTests(unittest.TestCase):
++    def test_untraced_label_candidates_exclude_outdoor_and_retain_bedroom(self):
++        spatial = {"standalone_text_items": [
++            {"text": "BEDROOM", "bbox": [10, 10, 60, 20]},
++            {"text": "3", "bbox": [62, 10, 70, 20]},
++            {"text": "BALCONY", "bbox": [10, 40, 65, 50]},
++        ]}
++        rows = house_windows_service._untraced_labels(spatial, "First Floor", set())
++        self.assertEqual([(row["label"], row["eligible"]) for row in rows],
++                         [("Bedroom 3", True), ("Balcony", False)])
++
++    def test_scheduled_window_can_be_assigned_to_untraced_room_label(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root = job(folder)
++            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 9,
++                "standalone_text_items": [{"text": "BEDROOM", "bbox": [700, 180, 760, 190]},
++                                          {"text": "3", "bbox": [762, 180, 770, 190]}]}]}))
++            def pages(number):
++                return (1000, 700, SCHEDULE if number == 20 else [word("W4", 750, 200)])
++            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
++                 patch.object(reviewer_room_geometry_service, "post"), \
++                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
++                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
++            self.assertEqual([(row["mark"], row["room"]) for row in result["assigned_without_wall"]],
++                             [("W4", "Bedroom 3")])
++            self.assertFalse(any(row.get("mark") == "W4" for row in result["unplaced"]))
++
+     def test_trace_must_belong_to_its_plan_level(self):
+         levels = {8: "Ground Floor", 9: "First Floor"}
+         self.assertFalse(house_windows_service._same_plan_level(
+@@ -66,7 +92,7 @@ class HouseWindowsServiceTests(unittest.TestCase):
+             ai_preliminary_service._attach_house_window_coverage(
+                 {"root": root, "room_use": root / "room_use_resolution.json"}, report)
+             self.assertEqual(report["glazing_coverage"], {"status": "needs_review", "scheduled": 28,
+-                                                          "placed": 1, "unplaced": 1})
++                                                          "placed": 1, "assigned_without_wall": 0, "unplaced": 1})
+             self.assertIn("included-scope subtotal", report["warnings"][0])
+             self.assertEqual(report["known_exclusions"][0]["component_type"], "glazing and solar")
+ 

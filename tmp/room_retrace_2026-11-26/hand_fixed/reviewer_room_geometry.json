@@ -1,0 +1,3724 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "trace_id": "room_trace_fix_8_bedroom_5",
+      "room_id": "room-use:ground-floor:bedroom-5",
+      "room_label": "Bedroom 5",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1234.93,
+          1652.56
+        ],
+        [
+          976.95,
+          1652.56
+        ],
+        [
+          976.95,
+          1375.8
+        ],
+        [
+          1234.93,
+          1378.63
+        ],
+        [
+          1234.93,
+          1652.56
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:03:46.062496+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100340Z_271d6f4f",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_corner_outline",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_corner_outline",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 14.14,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "external"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:21:58.781708+00:00",
+      "edge_sources": {
+        "0": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W07-room_trace_fix_8_bedroom_5-0-0",
+          "edge_index": 0,
+          "width_m": 1.09,
+          "offset_m": 2.1649,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W07",
+          "evidence": [
+            "Schedule p17: W07: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1042.9, 1691.6); 551.0 mm to eligible outside edge 0 of trace room_trace_fix_8_bedroom_5"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W06-room_trace_fix_8_bedroom_5-0-1",
+          "edge_index": 0,
+          "width_m": 1.09,
+          "offset_m": 0.5149,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W06",
+          "evidence": [
+            "Schedule p17: W06: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1159.8, 1691.6); 551.0 mm to eligible outside edge 0 of trace room_trace_fix_8_bedroom_5"
+          ],
+          "assumptions": []
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_8_ensuite",
+      "room_id": "room-use:ground-floor:ensuite",
+      "room_label": "Ensuite",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1169.08,
+          1216.74
+        ],
+        [
+          980.85,
+          1216.74
+        ],
+        [
+          980.85,
+          1087.68
+        ],
+        [
+          1169.08,
+          1087.68
+        ],
+        [
+          1169.08,
+          1216.74
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:03:17.611667+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100046Z_65e5555d",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 4.84,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_wir",
+      "room_id": "room-use:ground-floor:wir",
+      "room_label": "Wir",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          973.05,
+          1380.75
+        ],
+        [
+          973.05,
+          1220.58
+        ],
+        [
+          1156.61,
+          1220.58
+        ],
+        [
+          1156.61,
+          1380.75
+        ],
+        [
+          973.05,
+          1380.75
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:45.016400+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092719Z_8b983d9b",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 5.85,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_toilet",
+      "room_id": "room-use:ground-floor:toilet",
+      "room_label": "Toilet",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1169.08,
+          1279.76
+        ],
+        [
+          1169.08,
+          1087.68
+        ],
+        [
+          1238.47,
+          1087.68
+        ],
+        [
+          1238.47,
+          1279.76
+        ],
+        [
+          1169.08,
+          1279.76
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:45.016416+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092719Z_8b983d9b",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 2.65,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_linen",
+      "room_id": "room-use:ground-floor:linen",
+      "room_label": "Linen",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1234.93,
+          1503.01
+        ],
+        [
+          1234.93,
+          1385.36
+        ],
+        [
+          1411.06,
+          1385.36
+        ],
+        [
+          1411.06,
+          1503.01
+        ],
+        [
+          1234.93,
+          1503.01
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:04:16.413590+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100038Z_9a41a4d4",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_corner_outline",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_corner_outline",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 4.12,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_study",
+      "room_id": "room-use:ground-floor:study",
+      "room_label": "Study",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1235.29,
+          1767.38
+        ],
+        [
+          1235.29,
+          1526.4
+        ],
+        [
+          1540.76,
+          1526.4
+        ],
+        [
+          1540.76,
+          1767.38
+        ],
+        [
+          1235.29,
+          1767.38
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:45.016393+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092719Z_8b983d9b",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 14.65,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "external"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:21:59.008991+00:00",
+      "edge_sources": {
+        "3": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W04-room_trace_fix_8_study-3-0",
+          "edge_index": 3,
+          "width_m": 1.09,
+          "offset_m": 0.68,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W04",
+          "evidence": [
+            "Schedule p17: W04: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1453.9, 1806.4); 551.1 mm to eligible outside edge 3 of trace room_trace_fix_8_study"
+          ],
+          "assumptions": []
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_8_entry",
+      "room_id": "room-use:ground-floor:entry",
+      "room_label": "Entry",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1754.81,
+          1663.19
+        ],
+        [
+          1540.76,
+          1663.19
+        ],
+        [
+          1540.76,
+          1380.46
+        ],
+        [
+          1754.81,
+          1380.46
+        ],
+        [
+          1754.81,
+          1663.19
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:03:17.611641+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100046Z_65e5555d",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 12.05,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_media",
+      "room_id": "room-use:ground-floor:media",
+      "room_label": "Media",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1754.81,
+          1770.22
+        ],
+        [
+          1754.81,
+          1373.02
+        ],
+        [
+          2061.99,
+          1373.02
+        ],
+        [
+          2061.99,
+          1770.22
+        ],
+        [
+          1754.81,
+          1770.22
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:45.016377+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092719Z_8b983d9b",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 24.29,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "external"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:21:59.238325+00:00",
+      "edge_sources": {
+        "3": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W03-room_trace_fix_8_media-3-0",
+          "edge_index": 3,
+          "width_m": 1.09,
+          "offset_m": 2.5641,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W03",
+          "evidence": [
+            "Schedule p17: W03: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1841.6, 1806.4); 511.1 mm to eligible outside edge 3 of trace room_trace_fix_8_media"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W02-room_trace_fix_8_media-3-1",
+          "edge_index": 3,
+          "width_m": 1.09,
+          "offset_m": 0.7041,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W02",
+          "evidence": [
+            "Schedule p17: W02: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1973.5, 1806.4); 511.1 mm to eligible outside edge 3 of trace room_trace_fix_8_media"
+          ],
+          "assumptions": []
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_8_living",
+      "room_id": "room-use:ground-floor:living",
+      "room_label": "Living",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          2061.99,
+          1676.66
+        ],
+        [
+          2061.99,
+          1371.03
+        ],
+        [
+          2452.93,
+          1371.03
+        ],
+        [
+          2452.93,
+          1676.66
+        ],
+        [
+          2061.99,
+          1676.66
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:45.016369+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092719Z_8b983d9b",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 23.78,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "external"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:21:59.464712+00:00",
+      "edge_sources": {
+        "3": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W01-room_trace_fix_8_living-3-0",
+          "edge_index": 3,
+          "width_m": 3.25,
+          "offset_m": 1.26,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W01",
+          "evidence": [
+            "Schedule p17: W01: head_mm 2400, height_mm 2200, width_mm 3250; plan p8 tag at image px (2248.5, 1718.9); 596.5 mm to eligible outside edge 3 of trace room_trace_fix_8_living"
+          ],
+          "assumptions": []
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_8_sitting",
+      "room_id": "room-use:ground-floor:sitting",
+      "room_label": "Sitting",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1501.07,
+          1276.76
+        ],
+        [
+          1501.07,
+          801.7
+        ],
+        [
+          1782.45,
+          801.7
+        ],
+        [
+          1782.45,
+          1276.76
+        ],
+        [
+          1501.07,
+          1276.76
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:45.016385+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092719Z_8b983d9b",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 26.61,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "external"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:21:59.824311+00:00",
+      "edge_sources": {
+        "1": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W10-room_trace_fix_8_sitting-1-0",
+          "edge_index": 1,
+          "width_m": 2.29,
+          "offset_m": 0.85,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.6,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W10",
+          "evidence": [
+            "Schedule p17: W10: head_mm 2400, height_mm 1800, width_mm 2290; plan p8 tag at image px (1642.5, 778.7); 325.0 mm to eligible outside edge 1 of trace room_trace_fix_8_sitting"
+          ],
+          "assumptions": []
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_8_scullery",
+      "room_id": "room-use:ground-floor:scullery",
+      "room_label": "Scullery",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1826.39,
+          823.32
+        ],
+        [
+          1826.39,
+          695.04
+        ],
+        [
+          2115.56,
+          695.04
+        ],
+        [
+          2115.56,
+          823.32
+        ],
+        [
+          1826.39,
+          823.32
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:00:33.108643+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100009Z_714b517c",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 7.38,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_laundry",
+      "room_id": "room-use:ground-floor:laundry",
+      "room_label": "Laundry",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          2115.56,
+          823.32
+        ],
+        [
+          2115.56,
+          695.04
+        ],
+        [
+          2375.26,
+          695.04
+        ],
+        [
+          2375.26,
+          823.32
+        ],
+        [
+          2115.56,
+          823.32
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:00:33.108652+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100009Z_714b517c",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 6.63,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_bedroom_2",
+      "room_id": "room-use:first-floor:bedroom-2",
+      "room_label": "Bedroom 2",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          978.31,
+          1315.72
+        ],
+        [
+          1232.04,
+          1315.72
+        ],
+        [
+          1232.04,
+          1658.43
+        ],
+        [
+          978.31,
+          1658.43
+        ],
+        [
+          978.31,
+          1315.72
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951195+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 17.31,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "external"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:22:00.970073+00:00",
+      "edge_sources": {
+        "2": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W20-room_trace_fix_9_bedroom_2-2-0",
+          "edge_index": 2,
+          "width_m": 1.45,
+          "offset_m": 1.3844,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.45,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W20",
+          "evidence": [
+            "Schedule p17: W20: head_mm 2200, height_mm 1750, width_mm 1450; plan p9 tag at image px (1082.5, 1701.8); 611.3 mm to eligible outside edge 2 of trace room_trace_fix_9_bedroom_2"
+          ],
+          "assumptions": []
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_9_wir",
+      "room_id": "room-use:first-floor:wir",
+      "room_label": "Wir",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          978.31,
+          1090.72
+        ],
+        [
+          1121.83,
+          1090.72
+        ],
+        [
+          1121.83,
+          1291.3
+        ],
+        [
+          978.31,
+          1291.3
+        ],
+        [
+          978.31,
+          1090.72
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951295+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 5.73,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_ensuite_2",
+      "room_id": "room-use:first-floor:ensuite-2",
+      "room_label": "Ensuite (2)",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1121.83,
+          1090.72
+        ],
+        [
+          1283.78,
+          1090.72
+        ],
+        [
+          1283.78,
+          1291.3
+        ],
+        [
+          1121.83,
+          1291.3
+        ],
+        [
+          1121.83,
+          1090.72
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951222+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 6.47,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_bathroom",
+      "room_id": "room-use:first-floor:bathroom",
+      "room_label": "Bathroom",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1726.05,
+          1116.94
+        ],
+        [
+          1690.61,
+          1116.94
+        ],
+        [
+          1690.61,
+          1141.17
+        ],
+        [
+          1602.01,
+          1141.17
+        ],
+        [
+          1602.01,
+          1010.63
+        ],
+        [
+          1726.05,
+          1010.63
+        ],
+        [
+          1726.05,
+          1116.94
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:58:00.802477+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095727Z_7c0d42cc",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "enclosed_walls",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "enclosed_walls",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 3.05,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        },
+        {
+          "index": 5,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_bedroom_3",
+      "room_id": "room-use:first-floor:bedroom-3",
+      "room_label": "Bedroom 3",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1726.75,
+          931.25
+        ],
+        [
+          1993.25,
+          931.25
+        ],
+        [
+          1993.25,
+          1245.76
+        ],
+        [
+          1914.57,
+          1245.76
+        ],
+        [
+          1914.57,
+          1175.8
+        ],
+        [
+          1726.75,
+          1175.8
+        ],
+        [
+          1726.75,
+          931.25
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951205+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 14.07,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "external"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        },
+        {
+          "index": 5,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:22:01.206223+00:00",
+      "edge_sources": {
+        "0": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W25-room_trace_fix_9_bedroom_3-0-0",
+          "edge_index": 0,
+          "width_m": 2.29,
+          "offset_m": 0.8001,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.83,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W25",
+          "evidence": [
+            "Schedule p17: W25: head_mm 2200, height_mm 1370, width_mm 2290; plan p9 tag at image px (1864.6, 871.6); 841.1 mm to eligible outside edge 0 of trace room_trace_fix_9_bedroom_3"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W24-room_trace_fix_9_bedroom_3-0-1",
+          "edge_index": 0,
+          "width_m": 1.4701198198733172,
+          "offset_m": 0.0,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.83,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W24",
+          "evidence": [
+            "Schedule p17: W24: head_mm 2200, height_mm 1370, width_mm 2290; plan p9 tag at image px (1616.2, 939.7); 1564.5 mm to eligible outside edge 0 of trace room_trace_fix_9_bedroom_3"
+          ],
+          "assumptions": [
+            "Scheduled width 2.29 m exceeds the remaining traced edge length 1.47 m; width trimmed to fit the traced edge.",
+            "Tag 1.6 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+          ]
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_9_ensuite_1",
+      "room_id": "room-use:first-floor:ensuite-1",
+      "room_label": "Ensuite (1)",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          2001.04,
+          923.45
+        ],
+        [
+          2144.21,
+          923.45
+        ],
+        [
+          2144.21,
+          1152.38
+        ],
+        [
+          2001.04,
+          1152.38
+        ],
+        [
+          2001.04,
+          923.45
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951230+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 6.52,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_bedroom_4",
+      "room_id": "room-use:first-floor:bedroom-4",
+      "room_label": "Bedroom 4",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          2150.29,
+          1155.59
+        ],
+        [
+          2151.15,
+          931.25
+        ],
+        [
+          2450.39,
+          931.25
+        ],
+        [
+          2450.39,
+          1246.64
+        ],
+        [
+          2150.29,
+          1246.64
+        ],
+        [
+          2150.29,
+          1155.59
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:27:14.645051+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T092635Z_29598316",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 18.82,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "external"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:22:01.442429+00:00",
+      "edge_sources": {
+        "1": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W26-room_trace_fix_9_bedroom_4-1-0",
+          "edge_index": 1,
+          "width_m": 0.61,
+          "offset_m": 0.0,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 1.255,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W26",
+          "evidence": [
+            "Schedule p17: W26: head_mm 2200, height_mm 945, width_mm 610; plan p9 tag at image px (2107.7, 871.6); 1040.7 mm to eligible outside edge 1 of trace room_trace_fix_9_bedroom_4"
+          ],
+          "assumptions": [
+            "Tag 1.0 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+          ]
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_9_ensuite_3",
+      "room_id": "room-use:first-floor:ensuite-3",
+      "room_label": "Ensuite (3)",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          2096.02,
+          1255.15
+        ],
+        [
+          2450.39,
+          1255.15
+        ],
+        [
+          2450.39,
+          1402.92
+        ],
+        [
+          2096.02,
+          1402.92
+        ],
+        [
+          2096.02,
+          1255.15
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951238+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 10.42,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_walk_in_robe",
+      "room_id": "room-use:first-floor:walk-in-robe",
+      "room_label": "Walk in robe",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          2057.74,
+          1432.33
+        ],
+        [
+          2349.04,
+          1432.33
+        ],
+        [
+          2349.04,
+          1668.35
+        ],
+        [
+          2057.74,
+          1668.35
+        ],
+        [
+          2057.74,
+          1432.33
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951287+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 13.69,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_storage_1",
+      "room_id": "room-use:first-floor:storage-1",
+      "room_label": "Storage (1)",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          2360.38,
+          1674.02
+        ],
+        [
+          2360.38,
+          1417.45
+        ],
+        [
+          2444.72,
+          1417.45
+        ],
+        [
+          2444.72,
+          1674.02
+        ],
+        [
+          2360.38,
+          1674.02
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:58:00.802441+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095727Z_7c0d42cc",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "enclosed_walls",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "enclosed_walls",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 4.31,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_storage_2",
+      "room_id": "room-use:first-floor:storage-2",
+      "room_label": "Storage (2)",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1751.56,
+          1657.72
+        ],
+        [
+          1538.93,
+          1657.72
+        ],
+        [
+          1538.93,
+          1487.62
+        ],
+        [
+          1751.56,
+          1487.62
+        ],
+        [
+          1751.56,
+          1657.72
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:58:00.802430+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095727Z_7c0d42cc",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "enclosed_walls",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "enclosed_walls",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 7.2,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_study_nook",
+      "room_id": "room-use:first-floor:study-nook",
+      "room_label": "Study nook",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1538.23,
+          1377.91
+        ],
+        [
+          1760.77,
+          1377.91
+        ],
+        [
+          1760.77,
+          1478.41
+        ],
+        [
+          1538.23,
+          1478.41
+        ],
+        [
+          1538.23,
+          1377.91
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951279+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 4.45,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_master_bedroom",
+      "room_id": "room-use:first-floor:master-bedroom",
+      "room_label": "Master Bedroom",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1760.07,
+          1377.76
+        ],
+        [
+          2049.24,
+          1377.76
+        ],
+        [
+          2049.24,
+          1770.41
+        ],
+        [
+          1760.07,
+          1770.41
+        ],
+        [
+          1760.07,
+          1377.76
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951255+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 22.6,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "external"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:22:01.819385+00:00",
+      "edge_sources": {
+        "2": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W16-room_trace_fix_9_master_bedroom-2-0",
+          "edge_index": 2,
+          "width_m": 1.09,
+          "offset_m": 2.42,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.45,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W16",
+          "evidence": [
+            "Schedule p17: W16: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1839.1, 1818.7); 681.1 mm to eligible outside edge 2 of trace room_trace_fix_9_master_bedroom"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W15-room_trace_fix_9_master_bedroom-2-1",
+          "edge_index": 2,
+          "width_m": 1.09,
+          "offset_m": 0.5446,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.45,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W15",
+          "evidence": [
+            "Schedule p17: W15: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1972.0, 1818.7); 681.1 mm to eligible outside edge 2 of trace room_trace_fix_9_master_bedroom"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W14-room_trace_fix_9_master_bedroom-2-2",
+          "edge_index": 2,
+          "width_m": 1.45,
+          "offset_m": 0.0,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.45,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W14",
+          "evidence": [
+            "Schedule p17: W14: head_mm 2200, height_mm 1750, width_mm 1450; plan p9 tag at image px (2186.8, 1723.0); 2052.5 mm to eligible outside edge 2 of trace room_trace_fix_9_master_bedroom"
+          ],
+          "assumptions": [
+            "Tag 2.1 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+          ]
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_9_sitting",
+      "room_id": "room-use:first-floor:sitting",
+      "room_label": "Sitting",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1241.26,
+          1377.05
+        ],
+        [
+          1538.93,
+          1377.05
+        ],
+        [
+          1538.93,
+          1770.41
+        ],
+        [
+          1241.26,
+          1770.41
+        ],
+        [
+          1241.26,
+          1377.05
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951271+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 23.31,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "external"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "Archie drawing text (windows)",
+      "envelope_declared_at": "2026-11-26T10:22:02.048492+00:00",
+      "edge_sources": {
+        "2": "drawing_text"
+      },
+      "openings": [
+        {
+          "opening_id": "text-W18-room_trace_fix_9_sitting-2-0",
+          "edge_index": 2,
+          "width_m": 1.09,
+          "offset_m": 0.6899,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.45,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W18",
+          "evidence": [
+            "Schedule p17: W18: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1451.4, 1815.9); 641.6 mm to eligible outside edge 2 of trace room_trace_fix_9_sitting"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W19-room_trace_fix_9_sitting-2-1",
+          "edge_index": 2,
+          "width_m": 1.09,
+          "offset_m": 2.5499,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.2,
+          "sill_height_m": 0.45,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W19",
+          "evidence": [
+            "Schedule p17: W19: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1319.6, 1816.8); 653.9 mm to eligible outside edge 2 of trace room_trace_fix_9_sitting"
+          ],
+          "assumptions": []
+        },
+        {
+          "opening_id": "text-W17-room_trace_fix_9_sitting-2-2",
+          "edge_index": 2,
+          "width_m": 1.69,
+          "offset_m": 0.0,
+          "position_basis": "plan_tag_projection",
+          "head_height_m": 2.4,
+          "sill_height_m": 0.2,
+          "elevation_page": 17,
+          "glazing_choice": "residential",
+          "shading_category": "unshaded",
+          "declaration_source": "drawing_text",
+          "ai_run_id": "house-windows-5b3d34d8bad6",
+          "mark": "W17",
+          "evidence": [
+            "Schedule p17: W17: head_mm 2400, height_mm 2200, width_mm 1690; plan p9 tag at image px (1645.2, 1707.4); 1743.7 mm to eligible outside edge 2 of trace room_trace_fix_9_sitting"
+          ],
+          "assumptions": [
+            "Tag 1.7 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+          ]
+        }
+      ],
+      "envelope_declaration_source": "drawing_text",
+      "envelope_ai_run_id": "house-windows-5b3d34d8bad6"
+    },
+    {
+      "trace_id": "room_trace_fix_9_corridor",
+      "room_id": "room-use:first-floor:corridor",
+      "room_label": "Corridor",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1934.77,
+          1377.05
+        ],
+        [
+          1759.64,
+          1381.66
+        ],
+        [
+          1727.18,
+          1249.12
+        ],
+        [
+          2091.41,
+          1250.89
+        ],
+        [
+          2091.41,
+          1377.05
+        ],
+        [
+          1934.77,
+          1377.05
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:03:53.523798+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100340Z_5346cb56",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_corner_outline",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_corner_outline",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 8.89,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_9_balcony",
+      "room_id": "room-use:first-floor:balcony",
+      "room_label": "Balcony",
+      "level_name": "First Floor",
+      "page": 9,
+      "points_image_px": [
+        [
+          1538.23,
+          1669.06
+        ],
+        [
+          1752.27,
+          1669.06
+        ],
+        [
+          1752.27,
+          1781.04
+        ],
+        [
+          1776.37,
+          1781.04
+        ],
+        [
+          1776.37,
+          1953.98
+        ],
+        [
+          1514.13,
+          1953.98
+        ],
+        [
+          1514.13,
+          1781.04
+        ],
+        [
+          1538.23,
+          1781.04
+        ],
+        [
+          1538.23,
+          1669.06
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "registered_sheet_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "scale_page": 8,
+        "label": "This sheet prints no scale; scaled from the printed scale 1:100 of plan page 8, which prints the same dimension figures and grid letters at the same places (labelled assumption: one scale for both sheets). No printed dimension could be read to check it.",
+        "reason": "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:59:26.951166+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "31c277116bbba59b3edae4d6867c1ed5815bd9296c180bfc09eb6d8e327f6d78"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095834Z_22463611",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 9,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 13.8,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        },
+        {
+          "index": 5,
+          "boundary": "unknown"
+        },
+        {
+          "index": 6,
+          "boundary": "unknown"
+        },
+        {
+          "index": 7,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_kitchen",
+      "room_id": "room-use:ground-floor:kitchen",
+      "room_label": "Kitchen",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1826,
+          823
+        ],
+        [
+          2380,
+          823
+        ],
+        [
+          2380,
+          1006
+        ],
+        [
+          1826,
+          1006
+        ],
+        [
+          1826,
+          823
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:00:33.108652+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100009Z_714b517c",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 20.18,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_8_dining",
+      "room_id": "room-use:ground-floor:dining",
+      "room_label": "Dining",
+      "level_name": "Ground Floor",
+      "page": 8,
+      "points_image_px": [
+        [
+          1782,
+          1006
+        ],
+        [
+          2380,
+          1006
+        ],
+        [
+          2380,
+          1371
+        ],
+        [
+          1782,
+          1371
+        ],
+        [
+          1782,
+          1006
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:00:33.108652+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "0277a595f13be32dbc8865b180522e4e942540ff26379c7ce8217135679a217b"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100009Z_714b517c",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_outline_snapped",
+      "evidence": [
+        {
+          "page": 8,
+          "method": "ai_outline_snapped",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 43.45,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_25_cellar_1",
+      "room_id": "room-use:basement:cellar-1",
+      "room_label": "Cellar (1)",
+      "level_name": "Basement",
+      "page": 25,
+      "points_image_px": [
+        [
+          1410.37,
+          1212.83
+        ],
+        [
+          1403.11,
+          1085.85
+        ],
+        [
+          1514.38,
+          1085.85
+        ],
+        [
+          1534.23,
+          965.36
+        ],
+        [
+          1720.74,
+          965.36
+        ],
+        [
+          1720.74,
+          1029.28
+        ],
+        [
+          1744.01,
+          1029.28
+        ],
+        [
+          1744.01,
+          1008.59
+        ],
+        [
+          1816.44,
+          1008.59
+        ],
+        [
+          1816.44,
+          1125.69
+        ],
+        [
+          1798.01,
+          1125.69
+        ],
+        [
+          1798.01,
+          1177.31
+        ],
+        [
+          1816.44,
+          1177.31
+        ],
+        [
+          1816.44,
+          1271.42
+        ],
+        [
+          1741.9,
+          1344.67
+        ],
+        [
+          1662.32,
+          1344.67
+        ],
+        [
+          1662.32,
+          1367.35
+        ],
+        [
+          1555.92,
+          1367.35
+        ],
+        [
+          1555.92,
+          1337.58
+        ],
+        [
+          1504.31,
+          1337.58
+        ],
+        [
+          1504.31,
+          1356.01
+        ],
+        [
+          1403.11,
+          1356.01
+        ],
+        [
+          1410.37,
+          1212.83
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:57:40.240873+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "42d5385da49cbfd83399c6ee1212501de52aa2168454e5e6ec1f44af53c9877f"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095727Z_a1f0b494",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "enclosed_walls",
+      "evidence": [
+        {
+          "page": 25,
+          "method": "enclosed_walls",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 27.09,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        },
+        {
+          "index": 5,
+          "boundary": "unknown"
+        },
+        {
+          "index": 6,
+          "boundary": "unknown"
+        },
+        {
+          "index": 7,
+          "boundary": "unknown"
+        },
+        {
+          "index": 8,
+          "boundary": "unknown"
+        },
+        {
+          "index": 9,
+          "boundary": "unknown"
+        },
+        {
+          "index": 10,
+          "boundary": "unknown"
+        },
+        {
+          "index": 11,
+          "boundary": "unknown"
+        },
+        {
+          "index": 12,
+          "boundary": "unknown"
+        },
+        {
+          "index": 13,
+          "boundary": "unknown"
+        },
+        {
+          "index": 14,
+          "boundary": "unknown"
+        },
+        {
+          "index": 15,
+          "boundary": "unknown"
+        },
+        {
+          "index": 16,
+          "boundary": "unknown"
+        },
+        {
+          "index": 17,
+          "boundary": "unknown"
+        },
+        {
+          "index": 18,
+          "boundary": "unknown"
+        },
+        {
+          "index": 19,
+          "boundary": "unknown"
+        },
+        {
+          "index": 20,
+          "boundary": "unknown"
+        },
+        {
+          "index": 21,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_25_cellar_2",
+      "room_id": "room-use:basement:cellar-2",
+      "room_label": "Cellar (2)",
+      "level_name": "Basement",
+      "page": 25,
+      "points_image_px": [
+        [
+          1574.63,
+          1715.85
+        ],
+        [
+          1576.27,
+          1674.82
+        ],
+        [
+          1763.77,
+          1674.82
+        ],
+        [
+          1763.24,
+          1777.01
+        ],
+        [
+          1576.27,
+          1777.01
+        ],
+        [
+          1574.63,
+          1715.85
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:57:40.240902+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "42d5385da49cbfd83399c6ee1212501de52aa2168454e5e6ec1f44af53c9877f"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095727Z_a1f0b494",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "enclosed_walls",
+      "evidence": [
+        {
+          "page": 25,
+          "method": "enclosed_walls",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 3.83,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_25_storage",
+      "room_id": "room-use:basement:storage",
+      "room_label": "Storage",
+      "level_name": "Basement",
+      "page": 25,
+      "points_image_px": [
+        [
+          1621.52,
+          949.89
+        ],
+        [
+          1546.28,
+          949.89
+        ],
+        [
+          1546.28,
+          837.08
+        ],
+        [
+          1816.44,
+          837.08
+        ],
+        [
+          1816.44,
+          949.89
+        ],
+        [
+          1673.14,
+          949.89
+        ],
+        [
+          1673.14,
+          914.46
+        ],
+        [
+          1621.52,
+          914.46
+        ],
+        [
+          1621.52,
+          949.89
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T09:57:40.240913+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "42d5385da49cbfd83399c6ee1212501de52aa2168454e5e6ec1f44af53c9877f"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T095727Z_a1f0b494",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "enclosed_walls",
+      "evidence": [
+        {
+          "page": 25,
+          "method": "enclosed_walls",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 5.7,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        },
+        {
+          "index": 5,
+          "boundary": "unknown"
+        },
+        {
+          "index": 6,
+          "boundary": "unknown"
+        },
+        {
+          "index": 7,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    },
+    {
+      "trace_id": "room_trace_fix_25_store",
+      "room_id": "room-use:basement:store",
+      "room_label": "Store",
+      "level_name": "Basement",
+      "page": 25,
+      "points_image_px": [
+        [
+          1528.0,
+          952.0
+        ],
+        [
+          1542.64,
+          836.08
+        ],
+        [
+          1817.44,
+          836.08
+        ],
+        [
+          1835.52,
+          997.32
+        ],
+        [
+          1751.51,
+          997.32
+        ],
+        [
+          1751.51,
+          964.36
+        ],
+        [
+          1600.06,
+          964.36
+        ],
+        [
+          1528.0,
+          952.0
+        ]
+      ],
+      "snapped_line_ids": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "calibration": {
+        "source": "sheet_printed_scale",
+        "status": "declared_scale_only",
+        "mm_per_px": 14.10926761678543,
+        "scale_text": "1:100",
+        "paper_adjustment": 1.0,
+        "label": "Scaled from the sheet's printed scale 1:100; no printed dimension could be read to check it.",
+        "reason": "No printed dimension has been read on this page yet."
+      },
+      "reviewer": "Claude (retrace review)",
+      "note": "Picked from AI runs and checked against the plan by Claude, 26 Nov 2026 (retrace copy, not yet engineer-approved).",
+      "status": "geometry_proposed",
+      "created_at": "2026-11-26T10:05:10.114266+00:00",
+      "source_fingerprints": {
+        "source_pdf": "2287f626ae44d48f26fa231bfabcc612ea0a1470ecc383dbb71abdb989466307",
+        "vector_page": "42d5385da49cbfd83399c6ee1212501de52aa2168454e5e6ec1f44af53c9877f"
+      },
+      "declaration_source": "ai_determined",
+      "ai_run_id": "20261126T100340Z_fa7e6dbc",
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "part_index": 0,
+      "part_count": 1,
+      "method": "ai_corner_outline",
+      "evidence": [
+        {
+          "page": 25,
+          "method": "ai_corner_outline",
+          "printed_area_m2": null
+        }
+      ],
+      "ai_measured_area_m2": 7.86,
+      "edges": [
+        {
+          "index": 0,
+          "boundary": "unknown"
+        },
+        {
+          "index": 1,
+          "boundary": "unknown"
+        },
+        {
+          "index": 2,
+          "boundary": "unknown"
+        },
+        {
+          "index": 3,
+          "boundary": "unknown"
+        },
+        {
+          "index": 4,
+          "boundary": "unknown"
+        },
+        {
+          "index": 5,
+          "boundary": "unknown"
+        },
+        {
+          "index": 6,
+          "boundary": "unknown"
+        }
+      ],
+      "roof": "unknown",
+      "envelope_reviewer": "",
+      "envelope_declared_at": ""
+    }
+  ],
+  "fingerprint": "20a5499acb3ab46d69db135fb34cfd33100ac9ee845b8e68e887c67b74b196c1"
+}

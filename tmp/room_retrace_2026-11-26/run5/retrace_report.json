@@ -1,0 +1,1604 @@
+{
+  "mode": "live",
+  "calls_made": 38,
+  "summary": {
+    "packets": [
+      {
+        "page": 8,
+        "task": "P0_room_names",
+        "target": "page-8",
+        "room_names": [
+          "Alfresco",
+          "Bedroom 5",
+          "Dining",
+          "Ensuite",
+          "Entry",
+          "Garage",
+          "Kitchen",
+          "Laundry",
+          "Linen",
+          "Living",
+          "Media",
+          "Scullery",
+          "Sitting",
+          "Study",
+          "Wir"
+        ],
+        "images": 1
+      },
+      {
+        "page": 9,
+        "task": "P0_room_names",
+        "target": "page-9",
+        "room_names": [
+          "Balcony",
+          "Balcony shown",
+          "Bathroom",
+          "Bedroom 2",
+          "Bedroom 3",
+          "Bedroom 4",
+          "Ensuite",
+          "Garage",
+          "Linen",
+          "Master Bedroom",
+          "Sitting",
+          "Storage",
+          "Study nook",
+          "Walk in robe",
+          "Wir"
+        ],
+        "images": 1
+      },
+      {
+        "page": 25,
+        "task": "P0_room_names",
+        "target": "page-25",
+        "room_names": [
+          "CELLAR",
+          "Cellar",
+          "Storage"
+        ],
+        "images": 1
+      }
+    ],
+    "provider_calls_available_now": 3,
+    "provider_calls_total": null,
+    "call_count_note": "Later packets and validation retries depend on live replies; an exact total cannot be known in dry run."
+  },
+  "window_placement": {
+    "schema_version": 1,
+    "version": "house-windows-text-v14",
+    "fingerprint": "f6863508fed8121c42532a96fd07b5189feed8ec9bb74a54d8802c8ae4385466",
+    "schedule_pages": [
+      2,
+      10,
+      17,
+      25
+    ],
+    "windows_in_schedule": 28,
+    "skylights": [],
+    "doors_not_counted": [],
+    "unread_schedule_rows": [],
+    "placed": [
+      {
+        "mark": "W01",
+        "room": "Living (3)",
+        "trace_id": "ai_room_trace_6e450c9f6598c78bb8",
+        "edge_index": 0,
+        "width_m": 3.25,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [],
+        "tag_position": {
+          "page": 8,
+          "x": 2248.4550762567255,
+          "y": 1718.9376409106449
+        },
+        "distance_mm": 756.5,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "evidence": "Schedule p17: W01: head_mm 2400, height_mm 2200, width_mm 3250; plan p8 tag at image px (2248.5, 1718.9); 756.5 mm to eligible outside edge 0 of trace ai_room_trace_6e450c9f6598c78bb8"
+      },
+      {
+        "mark": "W03",
+        "room": "Living (2)",
+        "trace_id": "ai_room_trace_948f5989c3773d6fc9",
+        "edge_index": 0,
+        "width_m": 1.09,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [
+          "Tag 1.9 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "tag_position": {
+          "page": 8,
+          "x": 1841.6285502051921,
+          "y": 1806.4412004276837
+        },
+        "distance_mm": 1940.2,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "evidence": "Schedule p17: W03: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1841.6, 1806.4); 1940.2 mm to eligible outside edge 0 of trace ai_room_trace_948f5989c3773d6fc9"
+      },
+      {
+        "mark": "W02",
+        "room": "Living (2)",
+        "trace_id": "ai_room_trace_948f5989c3773d6fc9",
+        "edge_index": 0,
+        "width_m": 1.09,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [
+          "Tag 1.9 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "tag_position": {
+          "page": 8,
+          "x": 1973.4585570644754,
+          "y": 1806.4412004276837
+        },
+        "distance_mm": 1940.2,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "evidence": "Schedule p17: W02: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1973.5, 1806.4); 1940.2 mm to eligible outside edge 0 of trace ai_room_trace_948f5989c3773d6fc9"
+      },
+      {
+        "mark": "W10",
+        "room": "Living (1)",
+        "trace_id": "ai_room_trace_9be3e829ed0da548e3",
+        "edge_index": 2,
+        "width_m": 2.29,
+        "sill_height_m": 0.6,
+        "head_height_m": 2.4,
+        "assumptions": [
+          "Tag 3.0 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "tag_position": {
+          "page": 8,
+          "x": 1642.4696021471082,
+          "y": 778.6657091042601
+        },
+        "distance_mm": 2960.0,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "evidence": "Schedule p17: W10: head_mm 2400, height_mm 1800, width_mm 2290; plan p8 tag at image px (1642.5, 778.7); 2960.0 mm to eligible outside edge 2 of trace ai_room_trace_9be3e829ed0da548e3"
+      },
+      {
+        "mark": "W07",
+        "room": "Bedroom",
+        "trace_id": "ai_room_trace_54c686a0e2ee142b4e",
+        "edge_index": 0,
+        "width_m": 1.09,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [],
+        "tag_position": {
+          "page": 8,
+          "x": 1042.8624750739632,
+          "y": 1691.6143456359491
+        },
+        "distance_mm": 551.0,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "evidence": "Schedule p17: W07: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1042.9, 1691.6); 551.0 mm to eligible outside edge 0 of trace ai_room_trace_54c686a0e2ee142b4e"
+      },
+      {
+        "mark": "W06",
+        "room": "Bedroom",
+        "trace_id": "ai_room_trace_54c686a0e2ee142b4e",
+        "edge_index": 0,
+        "width_m": 1.09,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [],
+        "tag_position": {
+          "page": 8,
+          "x": 1159.808005293449,
+          "y": 1691.6143456359491
+        },
+        "distance_mm": 551.0,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "evidence": "Schedule p17: W06: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1159.8, 1691.6); 551.0 mm to eligible outside edge 0 of trace ai_room_trace_54c686a0e2ee142b4e"
+      }
+    ],
+    "assigned_without_wall": [
+      {
+        "mark": "W04",
+        "page": 8,
+        "room": "Study",
+        "level_name": "Ground Floor",
+        "schedule_page": 17,
+        "width_m": 1.09,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "frame_group": "",
+        "assumptions": [
+          "Nearest printed room label on the same plan; no host wall or azimuth was established."
+        ],
+        "evidence": "Window schedule p17: W04: head_mm 2400, height_mm 2200, width_mm 1090; plan p8: STUDY"
+      },
+      {
+        "mark": "W20",
+        "page": 9,
+        "room": "Sitting",
+        "level_name": "First Floor",
+        "schedule_page": 17,
+        "width_m": 1.45,
+        "sill_height_m": 0.45,
+        "head_height_m": 2.2,
+        "frame_group": "",
+        "assumptions": [
+          "Nearest printed room label on the same plan; no host wall or azimuth was established."
+        ],
+        "evidence": "Window schedule p17: W20: head_mm 2200, height_mm 1750, width_mm 1450; plan p9: S I T T I N G"
+      },
+      {
+        "mark": "W19",
+        "page": 9,
+        "room": "Sitting",
+        "level_name": "First Floor",
+        "schedule_page": 17,
+        "width_m": 1.09,
+        "sill_height_m": 0.45,
+        "head_height_m": 2.2,
+        "frame_group": "",
+        "assumptions": [
+          "Nearest printed room label on the same plan; no host wall or azimuth was established."
+        ],
+        "evidence": "Window schedule p17: W19: head_mm 2200, height_mm 1750, width_mm 1090; plan p9: S I T T I N G"
+      },
+      {
+        "mark": "W18",
+        "page": 9,
+        "room": "Sitting",
+        "level_name": "First Floor",
+        "schedule_page": 17,
+        "width_m": 1.09,
+        "sill_height_m": 0.45,
+        "head_height_m": 2.2,
+        "frame_group": "",
+        "assumptions": [
+          "Nearest printed room label on the same plan; no host wall or azimuth was established."
+        ],
+        "evidence": "Window schedule p17: W18: head_mm 2200, height_mm 1750, width_mm 1090; plan p9: S I T T I N G"
+      },
+      {
+        "mark": "W16",
+        "page": 9,
+        "room": "Master Bedroom",
+        "level_name": "First Floor",
+        "schedule_page": 17,
+        "width_m": 1.09,
+        "sill_height_m": 0.45,
+        "head_height_m": 2.2,
+        "frame_group": "",
+        "assumptions": [
+          "Nearest printed room label on the same plan; no host wall or azimuth was established."
+        ],
+        "evidence": "Window schedule p17: W16: head_mm 2200, height_mm 1750, width_mm 1090; plan p9: MASTER BEDROOM"
+      },
+      {
+        "mark": "W15",
+        "page": 9,
+        "room": "Master Bedroom",
+        "level_name": "First Floor",
+        "schedule_page": 17,
+        "width_m": 1.09,
+        "sill_height_m": 0.45,
+        "head_height_m": 2.2,
+        "frame_group": "",
+        "assumptions": [
+          "Nearest printed room label on the same plan; no host wall or azimuth was established."
+        ],
+        "evidence": "Window schedule p17: W15: head_mm 2200, height_mm 1750, width_mm 1090; plan p9: MASTER BEDROOM"
+      }
+    ],
+    "unplaced": [
+      {
+        "mark": "W28",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W09",
+        "page": 8,
+        "reason": "head 5.65 m is above the room's ceiling 2.70 m (double-height space?)"
+      },
+      {
+        "mark": "W05",
+        "page": 8,
+        "reason": "head 4.16 m is above the room's ceiling 2.70 m (double-height space?)"
+      },
+      {
+        "mark": "W25",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W26",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W09",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W24",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W2",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W17",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W14",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W23",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W08",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      },
+      {
+        "mark": "W11",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      },
+      {
+        "mark": "W12",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      },
+      {
+        "mark": "W13",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      },
+      {
+        "mark": "W21",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      },
+      {
+        "mark": "W22",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      },
+      {
+        "mark": "W27",
+        "page": 17,
+        "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+      }
+    ],
+    "walls_taken_as_outside": [
+      {
+        "room": "Living (3)",
+        "edge_index": 0,
+        "reason": "a window stands in this wall"
+      },
+      {
+        "room": "Living (2)",
+        "edge_index": 0,
+        "reason": "a window stands in this wall"
+      },
+      {
+        "room": "Living (1)",
+        "edge_index": 2,
+        "reason": "a window stands in this wall"
+      },
+      {
+        "room": "Bedroom",
+        "edge_index": 0,
+        "reason": "a window stands in this wall"
+      }
+    ],
+    "invalid_traces": [
+      {
+        "room": "Linen",
+        "page": 8,
+        "level_name": "First Floor",
+        "plan_level": "Ground Floor",
+        "reason": "Room trace is assigned to a different level than its plan page."
+      }
+    ],
+    "coverage_status": "needs_review"
+  },
+  "room_outcomes": [
+    {
+      "page": 8,
+      "room": "Bedroom 5",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Dining",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Ensuite",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Entry",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Garage",
+      "task": "P0_room_outlines",
+      "outcome": "rejected",
+      "reason": "No garage is labelled or drawn on this plan; the tenancy shows bedrooms, living areas, alfresco, laundry and an existing tennis court, but no garage space."
+    },
+    {
+      "page": 8,
+      "room": "Kitchen",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Linen",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Living",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Media",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Sitting",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 8,
+      "room": "Study",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 9,
+      "room": "Garage",
+      "task": "P0_room_outlines",
+      "outcome": "rejected",
+      "reason": "No garage is drawn on this plan. The plan shows only the first floor area with bedrooms, bathrooms, ensuites, living areas, a balcony and a void, with no garage or car space."
+    },
+    {
+      "page": 9,
+      "room": "Linen",
+      "task": "P0_room_outlines",
+      "outcome": "needs_review",
+      "reason": "Below the automatic accuracy bar."
+    },
+    {
+      "page": 9,
+      "room": "Balcony",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "The corner-built area for Balcony is below the 4 m\u00b2 draft sanity floor or has no non-overlapping floor. Try printed dimensions or a scaled estimate next."
+    },
+    {
+      "page": 8,
+      "room": "Bedroom 5",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Bedroom",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 9,
+      "room": "Bedroom",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "The listed corners enclose too little of Bedroom's sketched floor (29% of the sketched area; the top of the sketch near corners 48, 40 is uncovered); list the corners all the way around Bedroom, following its walls and glazing."
+    },
+    {
+      "page": 8,
+      "room": "Dining",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The north side along the kitchen line (y\u2248285) from about x=927 to x=1390 has no numbered corner. The west side between 19 and the north-west corner at about (927,285), and the short west return near (888,545)-(888,708), also have no numbered corners."
+    },
+    {
+      "page": 8,
+      "room": "Ensuite",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Entry",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Kitchen",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "The listed corners enclose too little of Kitchen's sketched floor (24% of the sketched area; the left of the sketch near corners 10, 11 is uncovered); list the corners all the way around Kitchen, following its walls and glazing."
+    },
+    {
+      "page": 8,
+      "room": "Linen",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The bottom side is drawn as a joinery line, so it has no numbered corner along its full length. The top-right and bottom-right corners of the room are not numbered, so the right side is located by points 43 and 48."
+    },
+    {
+      "page": 9,
+      "room": "Linen",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "List at least three different corners around the outline."
+    },
+    {
+      "page": 8,
+      "room": "Living",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "The listed corners enclose too little of Living's sketched floor (20% of the sketched area; the right of the sketch near corners 58, 46 is uncovered); list the corners all the way around Living, following its walls and glazing."
+    },
+    {
+      "page": 9,
+      "room": "Living",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked"
+    },
+    {
+      "page": 8,
+      "room": "Media",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    },
+    {
+      "page": 8,
+      "room": "Sitting",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: The bottom (south) boundary of Sitting, the pink line at about y=617 running from the east corner near x=828 west to the stair wall near x=447, has no numbered corner."
+    },
+    {
+      "page": 25,
+      "room": "Store",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "The corner-built area for Store is below the 4 m\u00b2 draft sanity floor or has no non-overlapping floor. Try printed dimensions or a scaled estimate next."
+    },
+    {
+      "page": 8,
+      "room": "Study",
+      "task": "P0_outline_corners",
+      "outcome": "needs_review",
+      "reason": "Built from drawn corners the AI picked; sides with no drawn corner: none"
+    }
+  ],
+  "eval_room_tracing": {
+    "job": "turra_live5",
+    "summary": {
+      "printed_names": 32,
+      "names_without_position": 12,
+      "untraced_names": 17,
+      "traces": 26,
+      "merged_traces": 0,
+      "name_mismatches": 8,
+      "implausible_areas": 1
+    },
+    "pages": [
+      {
+        "page": 8,
+        "level": "Ground Floor",
+        "printed_names": [
+          {
+            "name": "GARAGE",
+            "x": 3638.3628205585055,
+            "y": 734.4291881903322
+          },
+          {
+            "name": "SCULLERY",
+            "x": 1990.922596776301,
+            "y": 776.23796564613
+          },
+          {
+            "name": "LAUNDRY",
+            "x": 2246.9185404268965,
+            "y": 776.23796564613
+          },
+          {
+            "name": "ALFRESCO",
+            "x": 2535.831284372068,
+            "y": 898.0510394355549
+          },
+          {
+            "name": "KITCHEN",
+            "x": 2114.5137428880257,
+            "y": 950.2870060056276
+          },
+          {
+            "name": "SITTING",
+            "x": 1647.1026796849944,
+            "y": 1042.40634580656
+          },
+          {
+            "name": "EN S U ITE",
+            "x": 1062.9513653802753,
+            "y": 1175.2967452017974
+          },
+          {
+            "name": "DINING",
+            "x": 2127.2904120490803,
+            "y": 1224.5320818109276
+          },
+          {
+            "name": "W IR",
+            "x": 1065.1391511955244,
+            "y": 1293.4965604132542
+          },
+          {
+            "name": "LINEN",
+            "x": 1316.934546080842,
+            "y": 1421.3233967494016
+          },
+          {
+            "name": "MEDIA",
+            "x": 1909.4869579161173,
+            "y": 1482.0611482088111
+          },
+          {
+            "name": "ENTRY",
+            "x": 1648.7278920048936,
+            "y": 1499.1897442358572
+          },
+          {
+            "name": "LIVING",
+            "x": 2247.356097589947,
+            "y": 1559.6024274494982
+          },
+          {
+            "name": "BEDROOM 5",
+            "x": 1129.4975590635356,
+            "y": 1588.095909453614
+          },
+          {
+            "name": "STUDY",
+            "x": 1448.5392390929933,
+            "y": 1613.4762378732519
+          }
+        ],
+        "names_without_position": [
+          "Bedroom",
+          "Corridor",
+          "Storage (1)",
+          "Toilet"
+        ],
+        "untraced_names": [
+          "GARAGE",
+          "SCULLERY",
+          "LAUNDRY",
+          "ALFRESCO",
+          "KITCHEN",
+          "EN S U ITE",
+          "W IR",
+          "ENTRY",
+          "STUDY"
+        ],
+        "traces": [
+          {
+            "trace_id": "ai_room_trace_4dbf0169a16ff6f5b0",
+            "room": "Corridor",
+            "method": "enclosed_walls",
+            "area_m2": 4.02,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_7756419c96bdf91cda",
+            "room": "Toilet",
+            "method": "enclosed_walls",
+            "area_m2": 1.71,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": true
+          },
+          {
+            "trace_id": "ai_room_trace_106f974021190f1433",
+            "room": "Kitchen",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.29,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_cc80d5ab9a34feed01",
+            "room": "Dining",
+            "method": "ai_corner_outline",
+            "area_m2": 44.64,
+            "printed_names": [
+              "DINING"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_6e450c9f6598c78bb8",
+            "room": "Living (3)",
+            "method": "ai_outline_snapped",
+            "area_m2": 22.3,
+            "printed_names": [
+              "LIVING"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_948f5989c3773d6fc9",
+            "room": "Living (2)",
+            "method": "ai_outline_snapped",
+            "area_m2": 16.53,
+            "printed_names": [
+              "MEDIA"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_9be3e829ed0da548e3",
+            "room": "Living (1)",
+            "method": "ai_outline_snapped",
+            "area_m2": 20.72,
+            "printed_names": [
+              "SITTING"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_54c686a0e2ee142b4e",
+            "room": "Bedroom",
+            "method": "ai_corner_outline",
+            "area_m2": 14.14,
+            "printed_names": [
+              "BEDROOM 5"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_271d2788fe6ab6e7fe",
+            "room": "Linen",
+            "method": "ai_corner_outline",
+            "area_m2": 4.13,
+            "printed_names": [
+              "LINEN"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          }
+        ]
+      },
+      {
+        "page": 9,
+        "level": "First Floor",
+        "printed_names": [
+          {
+            "name": "GARAGE /",
+            "x": 3548.838624998515,
+            "y": 814.9460921422873
+          },
+          {
+            "name": "STORAGE",
+            "x": 3548.838624998515,
+            "y": 845.6150308680863
+          },
+          {
+            "name": "BEDROOM 3",
+            "x": 1866.268811840027,
+            "y": 981.1809919784973
+          },
+          {
+            "name": "B A T H R O O M",
+            "x": 1633.6259190630606,
+            "y": 1110.6331695434883
+          },
+          {
+            "name": "BEDROOM 4",
+            "x": 2318.927947831665,
+            "y": 1144.077690983159
+          },
+          {
+            "name": "W IR",
+            "x": 1052.8750489969,
+            "y": 1196.663731048675
+          },
+          {
+            "name": "E NSU ITE",
+            "x": 1198.019010797135,
+            "y": 1210.8041997396163
+          },
+          {
+            "name": "R O B E",
+            "x": 1819.9002541899774,
+            "y": 1228.5204191340138
+          },
+          {
+            "name": "L IN E N",
+            "x": 1798.034897670717,
+            "y": 1269.1039393557598
+          },
+          {
+            "name": "E N S U I T E",
+            "x": 2231.3790103220135,
+            "y": 1326.3159506110621
+          },
+          {
+            "name": "BE D R OOM 2",
+            "x": 1098.7435413177493,
+            "y": 1363.4862542522362
+          },
+          {
+            "name": "S T U D Y N OOK",
+            "x": 1667.2553124517456,
+            "y": 1410.9587207593129
+          },
+          {
+            "name": "WAL K I N R O B E",
+            "x": 2199.849891315968,
+            "y": 1535.5848851371215
+          },
+          {
+            "name": "S I T T I N G",
+            "x": 1399.6203482640249,
+            "y": 1610.5256184116586
+          },
+          {
+            "name": "MASTER BEDROOM",
+            "x": 1909.0243974866075,
+            "y": 1680.4653017512912
+          },
+          {
+            "name": "BALCONY",
+            "x": 1651.4782513154926,
+            "y": 1857.5149720717316
+          }
+        ],
+        "names_without_position": [
+          "Balcony shown",
+          "Bedroom",
+          "Bedroom 1",
+          "Corridor (1)",
+          "Living"
+        ],
+        "untraced_names": [
+          "GARAGE /",
+          "STORAGE",
+          "W IR",
+          "R O B E",
+          "L IN E N",
+          "S T U D Y N OOK",
+          "WAL K I N R O B E",
+          "BALCONY"
+        ],
+        "traces": [
+          {
+            "trace_id": "ai_room_trace_63001de75f3c6c6732",
+            "room": "Balcony shown",
+            "method": "enclosed_walls",
+            "area_m2": 59.99,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_7df66b45548d10b6b7",
+            "room": "Storage (2)",
+            "method": "enclosed_walls",
+            "area_m2": 7.2,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_bb539caa68a6f5e425",
+            "room": "Storage (1)",
+            "method": "enclosed_walls",
+            "area_m2": 4.31,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_43fcd1a171c80638b4",
+            "room": "Bathroom",
+            "method": "enclosed_walls",
+            "area_m2": 3.05,
+            "printed_names": [
+              "B A T H R O O M"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_e80d129db8deebc3b5",
+            "room": "Ensuite (1)",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.46,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_99900f0729880497c9",
+            "room": "Ensuite (2)",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.22,
+            "printed_names": [
+              "E NSU ITE"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_1e4674ea7f5495d7d0",
+            "room": "Ensuite (3)",
+            "method": "ai_outline_snapped",
+            "area_m2": 7.64,
+            "printed_names": [
+              "E N S U I T E"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_2a1c487e2b790bdcbe",
+            "room": "Bedroom 3",
+            "method": "ai_outline_snapped",
+            "area_m2": 18.49,
+            "printed_names": [
+              "BE D R OOM 2"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_678979774a0cf158cf",
+            "room": "Bedroom 1",
+            "method": "ai_outline_snapped",
+            "area_m2": 14.25,
+            "printed_names": [
+              "BEDROOM 3"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_f736bdad84719be25d",
+            "room": "Bedroom 2",
+            "method": "ai_outline_snapped",
+            "area_m2": 20.37,
+            "printed_names": [
+              "BEDROOM 4"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_294b89dba2bbd24a58",
+            "room": "Bedroom 4",
+            "method": "ai_outline_snapped",
+            "area_m2": 22.32,
+            "printed_names": [
+              "MASTER BEDROOM"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_8ad511232bf9867d2c",
+            "room": "Balcony",
+            "method": "ai_outline_snapped",
+            "area_m2": 6.07,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_5249b9b83e1f58b895",
+            "room": "Living",
+            "method": "ai_corner_outline",
+            "area_m2": 22.92,
+            "printed_names": [
+              "S I T T I N G"
+            ],
+            "merged": false,
+            "name_mismatch": true,
+            "implausible_area": false
+          }
+        ]
+      },
+      {
+        "page": 25,
+        "level": "Basement",
+        "printed_names": [
+          {
+            "name": "CELLAR",
+            "x": 1698.8094347242513,
+            "y": 1165.507189954223
+          }
+        ],
+        "names_without_position": [
+          "Family",
+          "Storage",
+          "Store"
+        ],
+        "untraced_names": [],
+        "traces": [
+          {
+            "trace_id": "ai_room_trace_dc0ea3ad491736eb9b",
+            "room": "CELLAR",
+            "method": "enclosed_walls",
+            "area_m2": 27.09,
+            "printed_names": [
+              "CELLAR"
+            ],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_3d9cadff0d4e7fe36c",
+            "room": "Storage (1)",
+            "method": "enclosed_walls",
+            "area_m2": 5.7,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_601a1a23de445d0d3d",
+            "room": "Storage (2)",
+            "method": "enclosed_walls",
+            "area_m2": 3.83,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          },
+          {
+            "trace_id": "ai_room_trace_bd1a91c5cc1504546a",
+            "room": "Store",
+            "method": "ai_outline_snapped",
+            "area_m2": 4.07,
+            "printed_names": [],
+            "merged": false,
+            "name_mismatch": false,
+            "implausible_area": false
+          }
+        ]
+      }
+    ]
+  },
+  "eval_window_placement": {
+    "schedule": 28,
+    "placed": 8,
+    "tags": 23,
+    "reasons": {
+      "no outside wall within 3000 mm of the tag": 15,
+      "schedule window without a matched traced wall": 7
+    },
+    "openings": [
+      {
+        "trace_id": "ai_room_trace_54c686a0e2ee142b4e",
+        "edge_index": 0,
+        "mark": "W07",
+        "width_m": 1.09,
+        "offset_m": 2.1649321096750604,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1042.8624750739632,
+          "y": 1691.6143456359491
+        },
+        "distance_mm": 551.0,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [],
+        "evidence": "Schedule p17: W07: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1042.9, 1691.6); 551.0 mm to eligible outside edge 0 of trace ai_room_trace_54c686a0e2ee142b4e"
+      },
+      {
+        "trace_id": "ai_room_trace_54c686a0e2ee142b4e",
+        "edge_index": 0,
+        "mark": "W06",
+        "width_m": 1.09,
+        "offset_m": 0.5149163272214671,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1159.808005293449,
+          "y": 1691.6143456359491
+        },
+        "distance_mm": 551.0,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [],
+        "evidence": "Schedule p17: W06: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1159.8, 1691.6); 551.0 mm to eligible outside edge 0 of trace ai_room_trace_54c686a0e2ee142b4e"
+      },
+      {
+        "trace_id": "ai_room_trace_6e450c9f6598c78bb8",
+        "edge_index": 0,
+        "mark": "W01",
+        "width_m": 3.25,
+        "offset_m": 1.2200621926601487,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 2248.4550762567255,
+          "y": 1718.9376409106449
+        },
+        "distance_mm": 756.5,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [],
+        "evidence": "Schedule p17: W01: head_mm 2400, height_mm 2200, width_mm 3250; plan p8 tag at image px (2248.5, 1718.9); 756.5 mm to eligible outside edge 0 of trace ai_room_trace_6e450c9f6598c78bb8"
+      },
+      {
+        "trace_id": "ai_room_trace_9be3e829ed0da548e3",
+        "edge_index": 1,
+        "mark": "W09",
+        "width_m": 1.09,
+        "offset_m": 4.254590573238321,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1397.2395359024115,
+          "y": 962.9572973755434
+        },
+        "distance_mm": 1508.5,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 1.45,
+        "head_height_m": 5.65,
+        "assumptions": [
+          "Tag 1.5 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "evidence": "Schedule p17: W09: head_mm 5650, height_mm 4200, width_mm 1090; plan p8 tag at image px (1397.2, 963.0); 1508.5 mm to eligible outside edge 1 of trace ai_room_trace_9be3e829ed0da548e3"
+      },
+      {
+        "trace_id": "ai_room_trace_948f5989c3773d6fc9",
+        "edge_index": 0,
+        "mark": "W03",
+        "width_m": 1.09,
+        "offset_m": 2.429959532542142,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1841.6285502051921,
+          "y": 1806.4412004276837
+        },
+        "distance_mm": 1940.2,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [
+          "Tag 1.9 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "evidence": "Schedule p17: W03: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1841.6, 1806.4); 1940.2 mm to eligible outside edge 0 of trace ai_room_trace_948f5989c3773d6fc9"
+      },
+      {
+        "trace_id": "ai_room_trace_948f5989c3773d6fc9",
+        "edge_index": 0,
+        "mark": "W02",
+        "width_m": 1.09,
+        "offset_m": 0.5699346858418558,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1973.4585570644754,
+          "y": 1806.4412004276837
+        },
+        "distance_mm": 1940.2,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 0.2,
+        "head_height_m": 2.4,
+        "assumptions": [
+          "Tag 1.9 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "evidence": "Schedule p17: W02: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1973.5, 1806.4); 1940.2 mm to eligible outside edge 0 of trace ai_room_trace_948f5989c3773d6fc9"
+      },
+      {
+        "trace_id": "ai_room_trace_54c686a0e2ee142b4e",
+        "edge_index": 0,
+        "mark": "W05",
+        "width_m": 1.09,
+        "offset_m": 0.0,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1322.1120590678759,
+          "y": 1806.4412004276837
+        },
+        "distance_mm": 2495.4,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 1.96,
+        "head_height_m": 4.16,
+        "assumptions": [
+          "Tag 2.5 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "evidence": "Schedule p17: W05: head_mm 4160, height_mm 2200, width_mm 1090; plan p8 tag at image px (1322.1, 1806.4); 2495.4 mm to eligible outside edge 0 of trace ai_room_trace_54c686a0e2ee142b4e"
+      },
+      {
+        "trace_id": "ai_room_trace_9be3e829ed0da548e3",
+        "edge_index": 2,
+        "mark": "W10",
+        "width_m": 2.29,
+        "offset_m": 0.8500448276005379,
+        "position_basis": "plan_tag_projection",
+        "tag_position": {
+          "page": 8,
+          "x": 1642.4696021471082,
+          "y": 778.6657091042601
+        },
+        "distance_mm": 2960.0,
+        "placement_reason": "nearest eligible outside wall of the owning room",
+        "schedule_page": 17,
+        "sill_height_m": 0.6,
+        "head_height_m": 2.4,
+        "assumptions": [
+          "Tag 3.0 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+        ],
+        "evidence": "Schedule p17: W10: head_mm 2400, height_mm 1800, width_mm 2290; plan p8 tag at image px (1642.5, 778.7); 2960.0 mm to eligible outside edge 2 of trace ai_room_trace_9be3e829ed0da548e3"
+      }
+    ],
+    "unplaced": [
+      {
+        "mark": "W28",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W04",
+        "page": 8,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W25",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W26",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W09",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W24",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W2",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W20",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W17",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W14",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W19",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W18",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W16",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W15",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W23",
+        "page": 9,
+        "reason": "no outside wall within 3000 mm of the tag"
+      },
+      {
+        "mark": "W08",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W11",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W12",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W13",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W21",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W22",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      },
+      {
+        "mark": "W27",
+        "page": 17,
+        "reason": "schedule window without a matched traced wall"
+      }
+    ],
+    "tags_found": [
+      {
+        "mark": "W28",
+        "x": 1030.549817311542,
+        "y": 256.3527747311859,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W10",
+        "x": 656.9020110934104,
+        "y": 311.4008935082556,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W09",
+        "x": 558.8227994683521,
+        "y": 385.1020525329033,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W07",
+        "x": 417.0904936532156,
+        "y": 676.5036812888409,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W06",
+        "x": 463.86259457316,
+        "y": 676.5036812888409,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W05",
+        "x": 528.7757346359401,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W04",
+        "x": 581.499848398515,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W03",
+        "x": 736.5551829606884,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W02",
+        "x": 789.280296725421,
+        "y": 722.4247803725827,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W01",
+        "x": 899.2645340378976,
+        "y": 687.4307048660289,
+        "page": 8,
+        "level": "Ground Floor"
+      },
+      {
+        "mark": "W25",
+        "x": 745.7452027899513,
+        "y": 348.58097373154163,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W26",
+        "x": 842.9744125809648,
+        "y": 348.58097373154163,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W09",
+        "x": 557.8087972804443,
+        "y": 386.3140551480357,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W24",
+        "x": 646.3909884138257,
+        "y": 375.7940324490316,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W2",
+        "x": 463.16846342593647,
+        "y": 420.43512877091797,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W20",
+        "x": 432.95852789159926,
+        "y": 680.5586900383146,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W17",
+        "x": 658.0140134927727,
+        "y": 682.8186949147166,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W14",
+        "x": 874.5974808139118,
+        "y": 689.0627083873951,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W19",
+        "x": 527.7617324480324,
+        "y": 726.5487892709375,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W18",
+        "x": 580.4858462106072,
+        "y": 726.2007885200578,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W16",
+        "x": 735.5411807727806,
+        "y": 727.3217909388395,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W15",
+        "x": 788.7032954804281,
+        "y": 727.3217909388395,
+        "page": 9,
+        "level": "First Floor"
+      },
+      {
+        "mark": "W23",
+        "x": 464.83159666397125,
+        "y": 420.4351287709173,
+        "page": 9,
+        "level": "First Floor"
+      }
+    ]
+  }
+}

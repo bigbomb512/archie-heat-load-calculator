@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "version": "house-windows-text-v14",
+  "fingerprint": "5b3d34d8bad65703c7c9488d50d49ab2a49c9fd9f14892811e82d6545467b670",
+  "schedule_pages": [
+    2,
+    10,
+    17,
+    25
+  ],
+  "windows_in_schedule": 28,
+  "skylights": [],
+  "doors_not_counted": [],
+  "unread_schedule_rows": [],
+  "placed": [
+    {
+      "mark": "W07",
+      "room": "Bedroom 5",
+      "trace_id": "room_trace_fix_8_bedroom_5",
+      "edge_index": 0,
+      "width_m": 1.09,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 1042.8624750739632,
+        "y": 1691.6143456359491
+      },
+      "distance_mm": 551.0,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W07: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1042.9, 1691.6); 551.0 mm to eligible outside edge 0 of trace room_trace_fix_8_bedroom_5"
+    },
+    {
+      "mark": "W06",
+      "room": "Bedroom 5",
+      "trace_id": "room_trace_fix_8_bedroom_5",
+      "edge_index": 0,
+      "width_m": 1.09,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 1159.808005293449,
+        "y": 1691.6143456359491
+      },
+      "distance_mm": 551.0,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W06: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1159.8, 1691.6); 551.0 mm to eligible outside edge 0 of trace room_trace_fix_8_bedroom_5"
+    },
+    {
+      "mark": "W04",
+      "room": "Study",
+      "trace_id": "room_trace_fix_8_study",
+      "edge_index": 3,
+      "width_m": 1.09,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 1453.9395655951184,
+        "y": 1806.4412004276837
+      },
+      "distance_mm": 551.1,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W04: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1453.9, 1806.4); 551.1 mm to eligible outside edge 3 of trace room_trace_fix_8_study"
+    },
+    {
+      "mark": "W03",
+      "room": "Media",
+      "trace_id": "room_trace_fix_8_media",
+      "edge_index": 3,
+      "width_m": 1.09,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 1841.6285502051921,
+        "y": 1806.4412004276837
+      },
+      "distance_mm": 511.1,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W03: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1841.6, 1806.4); 511.1 mm to eligible outside edge 3 of trace room_trace_fix_8_media"
+    },
+    {
+      "mark": "W02",
+      "room": "Media",
+      "trace_id": "room_trace_fix_8_media",
+      "edge_index": 3,
+      "width_m": 1.09,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 1973.4585570644754,
+        "y": 1806.4412004276837
+      },
+      "distance_mm": 511.1,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W02: head_mm 2400, height_mm 2200, width_mm 1090; plan p8 tag at image px (1973.5, 1806.4); 511.1 mm to eligible outside edge 3 of trace room_trace_fix_8_media"
+    },
+    {
+      "mark": "W01",
+      "room": "Living",
+      "trace_id": "room_trace_fix_8_living",
+      "edge_index": 3,
+      "width_m": 3.25,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 2248.4550762567255,
+        "y": 1718.9376409106449
+      },
+      "distance_mm": 596.5,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W01: head_mm 2400, height_mm 2200, width_mm 3250; plan p8 tag at image px (2248.5, 1718.9); 596.5 mm to eligible outside edge 3 of trace room_trace_fix_8_living"
+    },
+    {
+      "mark": "W10",
+      "room": "Sitting",
+      "trace_id": "room_trace_fix_8_sitting",
+      "edge_index": 1,
+      "width_m": 2.29,
+      "sill_height_m": 0.6,
+      "head_height_m": 2.4,
+      "assumptions": [],
+      "tag_position": {
+        "page": 8,
+        "x": 1642.4696021471082,
+        "y": 778.6657091042601
+      },
+      "distance_mm": 325.0,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W10: head_mm 2400, height_mm 1800, width_mm 2290; plan p8 tag at image px (1642.5, 778.7); 325.0 mm to eligible outside edge 1 of trace room_trace_fix_8_sitting"
+    },
+    {
+      "mark": "W20",
+      "room": "Bedroom 2",
+      "trace_id": "room_trace_fix_9_bedroom_2",
+      "edge_index": 2,
+      "width_m": 1.45,
+      "sill_height_m": 0.45,
+      "head_height_m": 2.2,
+      "assumptions": [],
+      "tag_position": {
+        "page": 9,
+        "x": 1082.5377438998164,
+        "y": 1701.7539962572446
+      },
+      "distance_mm": 611.3,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W20: head_mm 2200, height_mm 1750, width_mm 1450; plan p9 tag at image px (1082.5, 1701.8); 611.3 mm to eligible outside edge 2 of trace room_trace_fix_9_bedroom_2"
+    },
+    {
+      "mark": "W25",
+      "room": "Bedroom 3",
+      "trace_id": "room_trace_fix_9_bedroom_3",
+      "edge_index": 0,
+      "width_m": 2.29,
+      "sill_height_m": 0.83,
+      "head_height_m": 2.2,
+      "assumptions": [],
+      "tag_position": {
+        "page": 9,
+        "x": 1864.6066016615564,
+        "y": 871.6354279944559
+      },
+      "distance_mm": 841.1,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W25: head_mm 2200, height_mm 1370, width_mm 2290; plan p9 tag at image px (1864.6, 871.6); 841.1 mm to eligible outside edge 0 of trace room_trace_fix_9_bedroom_3"
+    },
+    {
+      "mark": "W24",
+      "room": "Bedroom 3",
+      "trace_id": "room_trace_fix_9_bedroom_3",
+      "edge_index": 0,
+      "width_m": 1.4701198198733172,
+      "sill_height_m": 0.83,
+      "head_height_m": 2.2,
+      "assumptions": [
+        "Scheduled width 2.29 m exceeds the remaining traced edge length 1.47 m; width trimmed to fit the traced edge.",
+        "Tag 1.6 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+      ],
+      "tag_position": {
+        "page": 9,
+        "x": 1616.1886120646438,
+        "y": 939.6823607582774
+      },
+      "distance_mm": 1564.5,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W24: head_mm 2200, height_mm 1370, width_mm 2290; plan p9 tag at image px (1616.2, 939.7); 1564.5 mm to eligible outside edge 0 of trace room_trace_fix_9_bedroom_3"
+    },
+    {
+      "mark": "W26",
+      "room": "Bedroom 4",
+      "trace_id": "room_trace_fix_9_bedroom_4",
+      "edge_index": 1,
+      "width_m": 0.61,
+      "sill_height_m": 1.255,
+      "head_height_m": 2.2,
+      "assumptions": [
+        "Tag 1.0 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+      ],
+      "tag_position": {
+        "page": 9,
+        "x": 2107.7113856714427,
+        "y": 871.6354279944559
+      },
+      "distance_mm": 1040.7,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W26: head_mm 2200, height_mm 945, width_mm 610; plan p9 tag at image px (2107.7, 871.6); 1040.7 mm to eligible outside edge 1 of trace room_trace_fix_9_bedroom_4"
+    },
+    {
+      "mark": "W16",
+      "room": "Master Bedroom",
+      "trace_id": "room_trace_fix_9_master_bedroom",
+      "edge_index": 2,
+      "width_m": 1.09,
+      "sill_height_m": 0.45,
+      "head_height_m": 2.2,
+      "assumptions": [],
+      "tag_position": {
+        "page": 9,
+        "x": 1839.0932135156652,
+        "y": 1818.686297614485
+      },
+      "distance_mm": 681.1,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W16: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1839.1, 1818.7); 681.1 mm to eligible outside edge 2 of trace room_trace_fix_9_master_bedroom"
+    },
+    {
+      "mark": "W15",
+      "room": "Master Bedroom",
+      "trace_id": "room_trace_fix_9_master_bedroom",
+      "edge_index": 2,
+      "width_m": 1.09,
+      "sill_height_m": 0.45,
+      "head_height_m": 2.2,
+      "assumptions": [],
+      "tag_position": {
+        "page": 9,
+        "x": 1972.0158654768452,
+        "y": 1818.686297614485
+      },
+      "distance_mm": 681.1,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W15: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1972.0, 1818.7); 681.1 mm to eligible outside edge 2 of trace room_trace_fix_9_master_bedroom"
+    },
+    {
+      "mark": "W14",
+      "room": "Master Bedroom",
+      "trace_id": "room_trace_fix_9_master_bedroom",
+      "edge_index": 2,
+      "width_m": 1.45,
+      "sill_height_m": 0.45,
+      "head_height_m": 2.2,
+      "assumptions": [
+        "Tag 2.1 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+      ],
+      "tag_position": {
+        "page": 9,
+        "x": 2186.779385802521,
+        "y": 1723.0185064627906
+      },
+      "distance_mm": 2052.5,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W14: head_mm 2200, height_mm 1750, width_mm 1450; plan p9 tag at image px (2186.8, 1723.0); 2052.5 mm to eligible outside edge 2 of trace room_trace_fix_9_master_bedroom"
+    },
+    {
+      "mark": "W18",
+      "room": "Sitting",
+      "trace_id": "room_trace_fix_9_sitting",
+      "edge_index": 2,
+      "width_m": 1.09,
+      "sill_height_m": 0.45,
+      "head_height_m": 2.2,
+      "assumptions": [],
+      "tag_position": {
+        "page": 9,
+        "x": 1451.4042289055913,
+        "y": 1815.8832030777473
+      },
+      "distance_mm": 641.6,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W18: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1451.4, 1815.9); 641.6 mm to eligible outside edge 2 of trace room_trace_fix_9_sitting"
+    },
+    {
+      "mark": "W19",
+      "room": "Sitting",
+      "trace_id": "room_trace_fix_9_sitting",
+      "edge_index": 2,
+      "width_m": 1.09,
+      "sill_height_m": 0.45,
+      "head_height_m": 2.2,
+      "assumptions": [],
+      "tag_position": {
+        "page": 9,
+        "x": 1319.576722378349,
+        "y": 1816.753387644014
+      },
+      "distance_mm": 653.9,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W19: head_mm 2200, height_mm 1750, width_mm 1090; plan p9 tag at image px (1319.6, 1816.8); 653.9 mm to eligible outside edge 2 of trace room_trace_fix_9_sitting"
+    },
+    {
+      "mark": "W17",
+      "room": "Sitting",
+      "trace_id": "room_trace_fix_9_sitting",
+      "edge_index": 2,
+      "width_m": 1.69,
+      "sill_height_m": 0.2,
+      "head_height_m": 2.4,
+      "assumptions": [
+        "Tag 1.7 m from this room's traced outside wall: placed on the nearest outside wall of the room it is nearest (the outline may stop short of the wall)."
+      ],
+      "tag_position": {
+        "page": 9,
+        "x": 1645.2499713766485,
+        "y": 1707.4051948772512
+      },
+      "distance_mm": 1743.7,
+      "placement_reason": "nearest eligible outside wall of the owning room",
+      "evidence": "Schedule p17: W17: head_mm 2400, height_mm 2200, width_mm 1690; plan p9 tag at image px (1645.2, 1707.4); 1743.7 mm to eligible outside edge 2 of trace room_trace_fix_9_sitting"
+    }
+  ],
+  "assigned_without_wall": [],
+  "unplaced": [
+    {
+      "mark": "W28",
+      "page": 8,
+      "reason": "no outside wall within 3000 mm of the tag"
+    },
+    {
+      "mark": "W05",
+      "page": 8,
+      "reason": "head 4.16 m is above the room's ceiling 2.70 m (double-height space?)"
+    },
+    {
+      "mark": "W09",
+      "page": 8,
+      "reason": "head 5.65 m is above the room's ceiling 2.70 m (double-height space?)"
+    },
+    {
+      "mark": "W09",
+      "page": 9,
+      "reason": "no outside wall within 3000 mm of the tag"
+    },
+    {
+      "mark": "W2",
+      "page": 9,
+      "reason": "no outside wall within 3000 mm of the tag"
+    },
+    {
+      "mark": "W23",
+      "page": 9,
+      "reason": "no outside wall within 3000 mm of the tag"
+    },
+    {
+      "mark": "W08",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    },
+    {
+      "mark": "W11",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    },
+    {
+      "mark": "W12",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    },
+    {
+      "mark": "W13",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    },
+    {
+      "mark": "W21",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    },
+    {
+      "mark": "W22",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    },
+    {
+      "mark": "W27",
+      "page": 17,
+      "reason": "Window is listed in the schedule but is not matched to a traced room wall."
+    }
+  ],
+  "walls_taken_as_outside": [
+    {
+      "room": "Bedroom 3",
+      "edge_index": 0,
+      "reason": "a window stands in this wall"
+    },
+    {
+      "room": "Bedroom 4",
+      "edge_index": 1,
+      "reason": "a window stands in this wall"
+    },
+    {
+      "room": "Sitting",
+      "edge_index": 2,
+      "reason": "a window stands in this wall"
+    }
+  ],
+  "invalid_traces": [],
+  "coverage_status": "needs_review"
+}

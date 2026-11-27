@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archie colour playground</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a control panel (left, or top on a phone) beside one live job screen whose tokens the controls rewrite. */
+:root {
+  --bg: #eef0f2; --fg: #1d2227; --muted: #5f6872; --line: #d5dae0; --panel: #ffffff; --ring: #1d2227;
+  --ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--ui); padding: 24px max(16px, env(safe-area-inset-right, 0px)) 48px max(16px, env(safe-area-inset-left, 0px)) }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start }
+@media (max-width: 880px) { .wrap { grid-template-columns: minmax(0, 1fr) } }
+h1 { font: 600 22px/1.2 var(--ui); margin: 0 0 4px } .intro { margin: 0 0 16px; color: var(--muted) }
+.controls { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 18px; position: sticky; top: 16px }
+@media (max-width: 880px) { .controls { position: static } }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0 }
+legend { font-weight: 600; margin-bottom: 6px; padding: 0 }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px }
+.swatches button { width: 32px; height: 32px; border-radius: 8px; border: 1px solid #0002; cursor: pointer; padding: 0; position: relative }
+.swatches button[aria-pressed="true"] { outline: 2px solid var(--ring); outline-offset: 2px }
+.swatches button:focus-visible { outline: 3px solid #1e88d8; outline-offset: 2px }
+.hint { font-size: 12px; color: var(--muted); min-height: 18px }
+select, .row button { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--fg); width: 100% }
+.row { display: flex; gap: 8px } .row button { cursor: pointer }
+.readout { font: 12px/1.5 "JetBrains Mono", ui-monospace, monospace; background: #f6f7f8; border: 1px solid var(--line); border-radius: 8px; padding: 10px; white-space: pre-wrap; word-break: break-word }
+.copy { font: inherit; font-weight: 600; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--fg); background: var(--fg); color: #fff; cursor: pointer }
+
+/* ---------- live mock ---------- */
+.mock { --m-bg:#f4f6f8; --m-sheet:#fff; --m-ink:#22272b; --m-ink2:#5c6670; --m-line:#dce2e7; --m-accent:#246b91; --m-accent-ink:#fff;
+  --m-wash:#eaf3f8; --m-warn-bg:#fdf1dc; --m-warn:#7a4a00; --m-ok:#1f6b47; --m-font:"Inter", system-ui, sans-serif; --m-data:"JetBrains Mono", ui-monospace, monospace; --m-r:8px;
+  background: var(--m-bg); color: var(--m-ink); font-family: var(--m-font); border-radius: 12px; border: 1px solid var(--m-line); overflow: hidden; min-width: 0;
+  transition: background .2s, color .2s }
+.mock .bar { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--m-line); background: var(--m-sheet); flex-wrap: wrap }
+.mock .logo { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--m-accent); position: relative }
+.mock .logo::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--m-accent) }
+.mock .brand { font-weight: 700; font-size: 16px; letter-spacing: -.01em }
+.mock .job { color: var(--m-ink2); font-size: 13px; min-width: 0 }
+.mock .nav { margin-left: auto; display: flex; gap: 14px; font-size: 13px } .mock .nav a { color: var(--m-accent); text-decoration: none; font-weight: 600 }
+.mock .steps { display: flex; gap: 4px; padding: 10px 18px 0; flex-wrap: wrap; background: var(--m-sheet); border-bottom: 1px solid var(--m-line) }
+.mock .steps span { font-weight: 500; font-size: 13px; color: var(--m-ink2); padding: 9px 10px 11px; border-bottom: 2px solid transparent; display: inline-flex; gap: 8px; align-items: center }
+.mock .steps .num { width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; font-weight: 600; background: var(--m-wash); color: var(--m-accent) }
+.mock .steps .done .num { background: var(--m-accent); color: var(--m-accent-ink) }
+.mock .steps .on { color: var(--m-ink); border-bottom-color: var(--m-accent) }
+.mock .body { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 14px; padding: 18px }
+@media (max-width: 700px) { .mock .body { grid-template-columns: minmax(0, 1fr) } }
+.mock .card { background: var(--m-sheet); border: 1px solid var(--m-line); border-radius: var(--m-r); padding: 16px; min-width: 0 }
+.mock h2 { font-size: 15px; margin: 0 0 4px; font-weight: 600 }
+.mock .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--m-ink2) }
+.mock .big { font-weight: 700; font-size: 38px; line-height: 1.1; margin: 4px 0 2px; font-variant-numeric: tabular-nums; letter-spacing: -.02em }
+.mock .big small { font-size: 16px; font-weight: 500; color: var(--m-ink2); margin-left: 4px }
+.mock .facts { display: flex; gap: 14px; flex-wrap: wrap; color: var(--m-ink2); font-size: 13px; margin-bottom: 14px }
+.mock .facts b { color: var(--m-ink); font-family: var(--m-data); font-weight: 500; font-variant-numeric: tabular-nums }
+.mock .actions { display: flex; gap: 8px; flex-wrap: wrap }
+.mock .btn { font: 600 13px/1 var(--m-font); border-radius: calc(var(--m-r) - 2px); padding: 12px 15px; min-height: 42px; border: 1px solid var(--m-accent); background: var(--m-accent); color: var(--m-accent-ink); cursor: pointer }
+.mock .btn.secondary { background: transparent; color: var(--m-accent) }
+.mock .todo { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px }
+.mock .todo li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 9px 11px; border-radius: calc(var(--m-r) - 2px); background: var(--m-wash) }
+.mock .todo li.warn { background: var(--m-warn-bg); color: var(--m-warn) }
+.mock .todo .kw { font-family: var(--m-data); font-size: 12px; font-variant-numeric: tabular-nums }
+.mock .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--m-accent) } .mock .warn .dot { background: var(--m-warn) }
+.mock table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px }
+.mock th { text-align: left; font-weight: 500; color: var(--m-ink2); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 6px; border-bottom: 1px solid var(--m-line) }
+.mock td { padding: 8px 6px; border-bottom: 1px solid var(--m-line) } .mock tr.sel td { background: var(--m-wash) }
+.mock .n { text-align: right; font-family: var(--m-data); font-variant-numeric: tabular-nums } .mock th.n { font-family: inherit }
+.mock .pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--m-wash); color: var(--m-accent); white-space: nowrap; font-weight: 600 }
+.mock .pill.review { background: var(--m-warn-bg); color: var(--m-warn) }
+.mock .chart { display: flex; align-items: flex-end; gap: 4px; height: 90px; margin-top: 12px; padding-top: 6px; border-top: 1px solid var(--m-line) }
+.mock .chart i { flex: 1; background: var(--m-wash); border-radius: 3px 3px 0 0; min-width: 0 } .mock .chart i.peak { background: var(--m-accent) }
+.mock .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--m-ink2); font-family: var(--m-data) }
+.tablewrap { overflow-x: auto }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside class="controls" aria-label="Style controls">
+    <div><h1>Colour playground</h1><p class="intro">Click to try colours on the Archie job screen. Nothing here changes the app.</p></div>
+    <fieldset><legend><label for="preset">Looks like… (sites engineers use, approximate)</label></legend>
+      <select id="preset"><option value="">Choose a site's colour scheme</option></select><div class="hint" id="presetNote"></div></fieldset>
+    <fieldset><legend>Main colour (buttons, links, active step)</legend><div class="swatches" id="accent"></div><div class="hint" id="accentName"></div></fieldset>
+    <fieldset><legend>Text colour</legend><div class="swatches" id="ink"></div><div class="hint" id="inkName"></div></fieldset>
+    <fieldset><legend>Page background</legend><div class="swatches" id="page"></div><div class="hint" id="pageName"></div></fieldset>
+    <fieldset><legend><label for="font">Font</label></legend>
+      <select id="font"></select></fieldset>
+    <fieldset><legend><label for="radius">Corners</label></legend>
+      <select id="radius"><option value="2">Square (2 px)</option><option value="6">Slight (6 px)</option><option value="8" selected>Medium (8 px)</option><option value="12">Round (12 px)</option></select></fieldset>
+    <div class="row"><button type="button" id="today">Show today's style</button><button type="button" id="random">Surprise me</button></div>
+    <fieldset><legend>Your picks</legend><div class="readout" id="readout"></div>
+      <button type="button" class="copy" id="copy">Copy picks</button><div class="hint" id="copied" aria-live="polite"></div></fieldset>
+  </aside>
+
+  <main class="mock" id="mock" aria-label="Example Archie job screen">
+    <div class="bar"><span class="logo" aria-hidden="true"></span><span class="brand">Archie</span><span class="job">139a Burns Road, Turramurra · CC set C8</span>
+      <span class="nav"><a href="#" onclick="return false">Jobs</a><a href="#" onclick="return false">New job</a></span></div>
+    <div class="steps">
+      <span class="done"><span class="num">1</span>Read the drawings</span>
+      <span class="done"><span class="num">2</span>Check the house</span>
+      <span class="on"><span class="num">3</span>Load and report</span>
+      <span><span class="num">4</span>Design the system</span>
+    </div>
+    <div class="body">
+      <section class="card">
+        <div class="label">Building cooling load</div>
+        <div class="big">14.48<small>kW</small></div>
+        <div class="facts"><span>Peak <b>17:00</b></span><span>Cooled <b>296.0 m²</b></span><span><b>49</b> W/m²</span></div>
+        <div class="actions"><button type="button" class="btn">Create the report</button><button type="button" class="btn secondary">Confirm room list</button></div>
+        <ul class="todo">
+          <li class="warn"><span class="dot"></span><span>Confirm the room list before recalculating</span><span class="kw">needed</span></li>
+          <li><span class="dot"></span><span>Check glass type for 17 windows</span><span class="kw">±1.2 kW</span></li>
+          <li><span class="dot"></span><span>W18 Sitting has no outside wall</span><span class="kw">±0.4 kW</span></li>
+        </ul>
+        <div class="chart" aria-hidden="true"><i style="height:22%"></i><i style="height:28%"></i><i style="height:36%"></i><i style="height:47%"></i><i style="height:58%"></i><i style="height:69%"></i><i style="height:79%"></i><i style="height:88%"></i><i style="height:95%"></i><i class="peak" style="height:100%"></i><i style="height:91%"></i><i style="height:74%"></i></div>
+        <div class="axis"><span>07:00</span><span>design day</span><span>18:00</span></div>
+      </section>
+      <section class="card">
+        <h2>Rooms</h2><div class="label">Ground floor</div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Room</th><th class="n">m²</th><th class="n">kW</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Dining</td><td class="n">43.45</td><td class="n">2.31</td><td><span class="pill review">check</span></td></tr>
+            <tr class="sel"><td>Sitting</td><td class="n">26.61</td><td class="n">1.38</td><td><span class="pill">traced</span></td></tr>
+            <tr><td>Media</td><td class="n">24.29</td><td class="n">1.52</td><td><span class="pill">traced</span></td></tr>
+            <tr><td>Living</td><td class="n">23.78</td><td class="n">1.64</td><td><span class="pill">traced</span></td></tr>
+            <tr><td>Kitchen</td><td class="n">20.18</td><td class="n">1.05</td><td><span class="pill review">check</span></td></tr>
+            <tr><td>Bedroom 5</td><td class="n">14.14</td><td class="n">0.92</td><td><span class="pill">traced</span></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+const ACCENTS = [
+  ["Today's steel blue", "#246b91"], ["Clear blue", "#2a73b8"], ["Sky blue", "#1e88d8"], ["Cornflower", "#4f7fd9"],
+  ["Indigo", "#4b4fc4"], ["Violet", "#7048c4"], ["Plum", "#9b3f86"], ["Raspberry", "#c0345e"],
+  ["Coral", "#d4553a"], ["Burnt orange", "#c2621a"], ["Gold", "#a87b0f"], ["Olive", "#6b7a1e"],
+  ["Forest green", "#1f7350"], ["Teal", "#0e7b80"], ["Petrol", "#11627a"], ["Graphite", "#3d4650"],
+];
+const INKS = [["Today's navy", "#163b50"], ["Charcoal", "#22272b"], ["Near black", "#111418"], ["Slate", "#2f3e4c"], ["Soft blue-grey", "#3a5566"], ["Warm brown-grey", "#352f2a"]];
+const PAGES = [["Today's grey-green", "#f2f4f4"], ["Cool grey", "#f4f6f8"], ["White", "#ffffff"], ["Faint blue", "#f2f7fc"], ["Warm grey", "#f5f4f1"], ["Faint mint", "#f1f6f3"], ["Dark", "#14181d"]];
+const FONTS = [
+  ["Alte Haas Grotesk (today; shown as Helvetica)", "\"Helvetica Neue\", Helvetica, Arial, sans-serif"],
+  ["Inter", "\"Inter\", system-ui, sans-serif"], ["IBM Plex Sans", "\"IBM Plex Sans\", system-ui, sans-serif"],
+  ["Source Sans 3", "\"Source Sans 3\", system-ui, sans-serif"], ["Figtree", "\"Figtree\", system-ui, sans-serif"],
+  ["Manrope", "\"Manrope\", system-ui, sans-serif"], ["DM Sans", "\"DM Sans\", system-ui, sans-serif"],
+  ["Public Sans", "\"Public Sans\", system-ui, sans-serif"],
+];
+const state = { accent: 1, ink: 1, page: 1, font: 1, radius: 8 };
+const mock = document.getElementById("mock");
+
+function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function rgbToHex(r, g, b) { return "#" + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, "0")).join(""); }
+function mix(a, b, t) { const A = hexToRgb(a), B = hexToRgb(b); return rgbToHex(...A.map((v, i) => v + (B[i] - v) * t)); }
+function lum(h) { const c = hexToRgb(h).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }); return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]; }
+function contrast(a, b) { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); }
+
+function apply() {
+  const accent = ACCENTS[state.accent][1], page = PAGES[state.page][1], dark = page === "#14181d";
+  let ink = INKS[state.ink][1];
+  const sheet = dark ? "#1c2229" : "#ffffff";
+  if (dark) ink = "#e6eaee";
+  const accentOnDark = dark ? mix(accent, "#ffffff", .35) : accent;
+  const set = {
+    "--m-bg": page, "--m-sheet": sheet, "--m-ink": ink,
+    "--m-ink2": dark ? "#9aa5b0" : mix(ink, "#ffffff", .38),
+    "--m-line": dark ? "#2c343d" : mix(page === "#ffffff" ? "#f4f6f8" : page, ink, .12),
+    "--m-accent": accentOnDark, "--m-accent-ink": contrast(accentOnDark, "#ffffff") >= 4.5 ? "#ffffff" : "#111418",
+    "--m-wash": dark ? mix(sheet, accentOnDark, .18) : mix("#ffffff", accent, .1),
+    "--m-warn-bg": dark ? "#3a2c16" : "#fdf1dc", "--m-warn": dark ? "#f2c27a" : "#7a4a00",
+    "--m-font": FONTS[state.font][1], "--m-r": state.radius + "px",
+  };
+  for (const [k, v] of Object.entries(set)) mock.style.setProperty(k, v);
+  for (const [id, list, key] of [["accent", ACCENTS, "accent"], ["ink", INKS, "ink"], ["page", PAGES, "page"]]) {
+    document.querySelectorAll(`#${id} button`).forEach((b, i) => b.setAttribute("aria-pressed", String(i === state[key])));
+    document.getElementById(id + "Name").textContent = `${list[state[key]][0]} · ${list[state[key]][1]}`;
+  }
+  document.getElementById("font").value = String(state.font);
+  document.getElementById("radius").value = String(state.radius);
+  const ratio = contrast(accent, "#ffffff").toFixed(1);
+  document.getElementById("readout").textContent =
+    `Main colour: ${ACCENTS[state.accent][0]} ${accent}\nText: ${dark ? "light text on dark" : INKS[state.ink][0] + " " + ink}\nBackground: ${PAGES[state.page][0]} ${page}\nFont: ${FONTS[state.font][0]}\nCorners: ${state.radius}px\nButton text contrast: ${ratio}:1${ratio < 4.5 ? " (below 4.5, too faint for small text)" : ""}`;
+  try { localStorage.setItem("archie-playground", JSON.stringify(state)); } catch (e) {}
+}
+
+function swatches(id, list, key) {
+  const host = document.getElementById(id);
+  list.forEach(([name, hex], i) => {
+    const b = document.createElement("button"); b.type = "button"; b.style.background = hex; b.title = `${name} ${hex}`;
+    b.setAttribute("aria-label", name); b.addEventListener("click", () => { state[key] = i; apply(); }); host.appendChild(b);
+  });
+}
+swatches("accent", ACCENTS, "accent"); swatches("ink", INKS, "ink"); swatches("page", PAGES, "page");
+const fontSel = document.getElementById("font");
+FONTS.forEach(([name], i) => { const o = document.createElement("option"); o.value = i; o.textContent = name; fontSel.appendChild(o); });
+fontSel.addEventListener("change", e => { state.font = +e.target.value; apply(); });
+document.getElementById("radius").addEventListener("change", e => { state.radius = +e.target.value; apply(); });
+document.getElementById("today").addEventListener("click", () => { Object.assign(state, { accent: 0, ink: 0, page: 0, font: 0, radius: 6 }); apply(); });
+document.getElementById("random").addEventListener("click", () => {
+  const r = n => Math.floor(Math.random() * n);
+  Object.assign(state, { accent: r(ACCENTS.length), ink: r(INKS.length), page: r(PAGES.length - 1), font: r(FONTS.length), radius: [2, 6, 8, 12][r(4)] }); apply();
+});
+document.getElementById("copy").addEventListener("click", () => {
+  const text = document.getElementById("readout").textContent, out = document.getElementById("copied");
+  Promise.resolve().then(() => navigator.clipboard.writeText(text)).then(() => { out.textContent = "Copied. Paste it to Claude."; },
+    () => { const r = document.createRange(); r.selectNodeContents(document.getElementById("readout")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); out.textContent = "Selected. Press Cmd+C to copy."; });
+});
+// Approximate colour schemes of sites engineers use (from memory, not official brand values). Fonts map to the nearest free font.
+const PRESETS = [
+  ["GitHub", "#0969da", "#1f2328", "#f6f8fa", "Inter", 6, "Near-black text, bright link blue; green is used for its main 'create' buttons."],
+  ["Stack Overflow", "#f48225", "#232629", "#ffffff", "Inter", 6, "Orange brand colour; its buttons are actually bright blue (#0a95ff)."],
+  ["Autodesk (AutoCAD, Revit, ACC)", "#0696d7", "#1a1a1a", "#ffffff", "Public Sans", 2, "Black and white with Autodesk's classic cyan blue; square, plain controls."],
+  ["MathWorks / MATLAB", "#0076a8", "#1f2a33", "#ffffff", "Source Sans 3", 6, "Deep blue with MATLAB orange (#e16737) as the second colour."],
+  ["Microsoft Excel / Office", "#217346", "#323130", "#faf9f8", "Source Sans 3", 6, "Excel green on warm off-white (Office's Fluent style); Word uses blue #2b579a."],
+  ["Jira / Confluence (Atlassian)", "#0c66e4", "#172b4d", "#ffffff", "Inter", 6, "Bright blue buttons, and dark navy text much like Archie's today."],
+  ["Google Sheets / Docs", "#1a73e8", "#202124", "#ffffff", "DM Sans", 8, "Google blue with near-black text; Sheets uses green #188038 for its identity."],
+  ["Procore (construction)", "#f47e42", "#232729", "#f4f5f6", "Public Sans", 6, "Orange brand on light grey; a common tool on building sites."],
+  ["Engineering ToolBox", "#1a0dab", "#000000", "#ffffff", "Public Sans", 2, "Plain white page, black text, classic web-link blue. Very no-frills."],
+  ["Wikipedia", "#3366cc", "#202122", "#ffffff", "Public Sans", 2, "Calm link blue, near-black text, light grey chrome (#f8f9fa)."],
+  ["Daikin", "#0097e0", "#1e2a33", "#ffffff", "Figtree", 8, "Bright sky blue: a cooling brand colour engineers see on every AC unit spec."],
+  ["Notion", "#2383e2", "#37352f", "#ffffff", "Inter", 6, "Warm dark-grey text on white, small blue accents; quiet and document-like."],
+  ["Linear", "#5e6ad2", "#282a30", "#fcfcfd", "Inter", 8, "Soft indigo accent and grey text; a popular look for modern software tools."],
+];
+const presetSel = document.getElementById("preset");
+PRESETS.forEach(([name], i) => { const o = document.createElement("option"); o.value = i; o.textContent = name; presetSel.appendChild(o); });
+function indexFor(list, id, name, hex) {
+  let i = list.findIndex(([, h]) => h.toLowerCase() === hex.toLowerCase());
+  if (i < 0) {
+    list.push([name, hex]); i = list.length - 1;
+    const b = document.createElement("button"); b.type = "button"; b.style.background = hex; b.title = `${name} ${hex}`; b.setAttribute("aria-label", name);
+    const key = id; b.addEventListener("click", () => { state[key] = i; apply(); }); document.getElementById(id).appendChild(b);
+  }
+  return i;
+}
+presetSel.addEventListener("change", e => {
+  const p = PRESETS[+e.target.value]; if (!p) { document.getElementById("presetNote").textContent = ""; return; }
+  const [name, accent, ink, page, font, radius, note] = p;
+  state.accent = indexFor(ACCENTS, "accent", name, accent);
+  state.ink = indexFor(INKS, "ink", name + " text", ink);
+  state.page = indexFor(PAGES, "page", name + " page", page);
+  state.font = Math.max(0, FONTS.findIndex(([n]) => n === font)); state.radius = radius;
+  document.getElementById("presetNote").textContent = note; apply();
+});
+try { const saved = JSON.parse(localStorage.getItem("archie-playground") || "{}");
+  if (saved.accent < ACCENTS.length && saved.ink < INKS.length && saved.page < PAGES.length) Object.assign(state, saved); } catch (e) {}
+apply();
+</script>
+</body>
+</html>
