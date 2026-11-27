@@ -1982,6 +1982,7 @@ def _corner_subjects(root, page):
         corner = _current_task(root, "P0_outline_corners", f"tenancy-page-{page}")
         if corner is None or not _settled(corner):
             return subjects   # rooms are clipped to the corner-built tenancy, so they wait for it
+    numbered = None
     for task in ("P0_room_outlines", "P0_unnamed_space"):
         record = _current_task(root, task, f"page-{page}")
         if not record or record.get("status") not in {"applied", "below_accuracy_bar"}:
@@ -1998,23 +1999,83 @@ def _corner_subjects(root, page):
                     and str(row["room"]).casefold() not in dropped):
                 pieces.setdefault(row["room"], []).append(row["points"])
         removed = rooms_not_on_plan(root)
-        for room, sketches in sorted(pieces.items()):
-            if room.casefold() in removed:
+        for name, sketches in sorted(pieces.items()):
+            if name.casefold() in removed:
                 continue        # a note-only room the plan doesn't show gets no corner question
-            target = f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}"
-            earlier = next((index for index, row in enumerate(subjects) if row[0] == target), None)
-            if earlier is None:
-                subjects.append((target, room, task, sketches))
-                continue
-            # The floor-with-no-room step named a space after a room the outline step already traced: one corner
-            # question per room. Two sketches under one target replaced each other's question on every rebuild, so one
-            # was always left unsent and the room's area flipped between the two answers (Turramurra Store, page 25,
-            # 2026-11-18: 7.8 m² and 5.8 m²). The same space is asked once; a separate piece is added to its sketch.
-            name, owner, source, kept = subjects[earlier]
-            extra = [points for points in sketches if not _same_sketched_space(points, kept)]
-            if extra:
-                subjects[earlier] = (name, owner, source, [*kept, *extra])
+            if numbered is None:
+                numbered = _numbered_traces(root, page)
+            for room, parts in _sketches_by_numbered_room(name, sketches, numbered):
+                _add_corner_subject(subjects, page, room, task, parts)
     return subjects
+
+
+def _numbered_traces(root, page):
+    """{drawing name, casefolded: [(numbered room label, outline)]} for the separate rooms the outline steps numbered from
+    one name on this plan page: "ENSUITE (1)".."(3)" under "ensuite", "Bedroom 1", "Bedroom 2" under "bedroom"/"bed"."""
+    from shapely.geometry import Polygon
+    from ai.room_use_resolution import base_label, occurrence_number
+    try:
+        traces = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
+    result = {}
+    for row in traces:
+        label = str(row.get("room_label") or "").strip()
+        if row.get("page") != page or len(row.get("points_image_px") or []) < 4:
+            continue
+        if occurrence_number(label) is not None:
+            names = [base_label(label).casefold()]
+        elif re.fullmatch(r"bed(?:room)?\s*\d+", label, re.I):
+            names = ["bedroom", "bed"]
+        else:
+            continue
+        try:
+            shape = Polygon(row["points_image_px"]).buffer(0)
+        except (ValueError, TypeError, GEOSException):
+            continue
+        for name in names:
+            result.setdefault(name, []).append((label, shape))
+    return result
+
+
+def _sketches_by_numbered_room(name, sketches, numbered):
+    """[(room, sketches)]: one corner question per numbered room when the outline steps numbered separate rooms printed
+    with this name (each sketch goes to the numbered room it covers most), else the name with all its sketches. One
+    question for the name drew one of them and was filed under the plain name, a room of its own on top of the
+    numbered one (house job 1795082136, 2026-11-19: ENSUITE drawn over ENSUITE (2), and cooled)."""
+    from shapely.geometry import Polygon
+    rooms = numbered.get(str(name).strip().casefold())
+    if not rooms:
+        return [(name, sketches)]
+    grouped = {}
+    for points in sketches:
+        try:
+            piece = Polygon(points).buffer(0)
+        except (ValueError, TypeError, GEOSException):
+            continue
+        if piece.is_empty or not piece.area:
+            continue
+        label, overlap = max(((label, piece.intersection(shape).area) for label, shape in rooms), key=lambda row: row[1])
+        if overlap >= 0.3 * piece.area:
+            grouped.setdefault(label, []).append(points)
+        # A sketch over none of them is no room of its own: the plain name was replaced by the numbered rooms.
+    return sorted(grouped.items())
+
+
+def _add_corner_subject(subjects, page, room, task, sketches):
+    target = f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}"
+    earlier = next((index for index, row in enumerate(subjects) if row[0] == target), None)
+    if earlier is None:
+        subjects.append((target, room, task, sketches))
+        return
+    # The floor-with-no-room step named a space after a room the outline step already traced: one corner
+    # question per room. Two sketches under one target replaced each other's question on every rebuild, so one
+    # was always left unsent and the room's area flipped between the two answers (Turramurra Store, page 25,
+    # 2026-11-18: 7.8 m² and 5.8 m²). The same space is asked once; a separate piece is added to its sketch.
+    name, owner, source, kept = subjects[earlier]
+    extra = [points for points in sketches if not _same_sketched_space(points, kept)]
+    if extra:
+        subjects[earlier] = (name, owner, source, [*kept, *extra])
 
 
 # What the screen says when one way of finding a plan's scale gave nothing usable and the next one takes over. The
@@ -2052,6 +2113,7 @@ def _p0_corner_packets(root, force=False):
     plan around the sketch with its drawn corners numbered, and the AI lists them in order (2026-10-24)."""
     from shapely.geometry import Polygon
     from shapely.ops import unary_union
+    from ai.room_use_resolution import base_label
     result = []
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
@@ -2092,7 +2154,8 @@ def _p0_corner_packets(root, force=False):
             else:
                 region = room_outline.corner_region(union, context["viewport"], mm_per_px)
             corners, kinds = room_outline.corner_candidates(context["objects"], wall_style_ids, region, mm_per_px, with_kinds=True)
-            subject = room or "the tenancy"
+            # A numbered room ("ENSUITE (2)") is asked about by its printed name; the red sketch shows which one.
+            subject = base_label(room) if room else "the tenancy"
             if len(corners) < 3:
                 # Nothing to snap to: the AI's sketch stays as the outline, labelled (it is never left blocked).
                 result.append(("P0_outline_corners", target, {"task": "P0_outline_corners", "page": number, "room": room},
@@ -2179,6 +2242,8 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
     parts = [part for part in parts if part.geom_type == "Polygon" and not part.is_empty]
     note = ("Built from drawn corners the AI picked"
             + ("; the outline crossed itself and was split where it crossed" if validated.get("repaired") else "")
+            + ("; a corner with no number was put back where the sides meet, following the sketch"
+               if validated.get("completed_corners") else "")
             + (f"; sides with no drawn corner: {validated['missing_sides']}" if validated.get("missing_sides") else ""))
     if packet.get("room") is None:
         tenancy = max(parts, key=lambda part: part.area)

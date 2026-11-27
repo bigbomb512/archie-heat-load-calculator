@@ -829,9 +829,54 @@ def corner_outline_prompt(subject, count):
             "{\"corners\": [int, ...], \"missing_sides\": string}")
 
 
+def complete_missing_corners(points, sketch_points, min_gain=0.1):
+    """The picked corners with a corner put back where the reply says a side has no numbered corner: the outline then
+    cuts straight across from one picked corner to the next, so a rectangular room came out a triangle (house job
+    1795082136, 2026-11-19: Family 11.7 m² of a 28 m² sketch, its north-east corner missing). A slanted side is replaced
+    by the two plan-square sides through the corner where they meet, when that fits the AI's sketch clearly better
+    (its overlap with the sketch, intersection over union, rises by min_gain or more); a real slanted wall, which the
+    sketch follows too, is kept. Returns (points, the corners added)."""
+    try:
+        sketch = Polygon(sketch_points).buffer(0)
+    except (ValueError, TypeError, GEOSException):
+        return list(points), []
+    if sketch.is_empty or not sketch.area:
+        return list(points), []
+
+    def fit(ring):
+        polygon = Polygon(ring)
+        if not polygon.is_valid or not polygon.area:
+            return None
+        union = polygon.union(sketch).area
+        return polygon.intersection(sketch).area / union if union else None
+
+    ring, added = [tuple(point) for point in points], []
+    while len(added) < len(points):
+        base = fit(ring)
+        if base is None:
+            break
+        best = None
+        for index, start in enumerate(ring):
+            end = ring[(index + 1) % len(ring)]
+            across, down = abs(end[0] - start[0]), abs(end[1] - start[1])
+            if min(across, down) < 0.15 * max(across, down):
+                continue                    # along the plan's axes (or nearly): a drawn side, not a cut corner
+            for corner in ((end[0], start[1]), (start[0], end[1])):
+                candidate = ring[:index + 1] + [corner] + ring[index + 1:]
+                score = fit(candidate)
+                if score is not None and score - base >= min_gain and (best is None or score > best[0]):
+                    best = (score, candidate, corner)
+        if best is None:
+            break
+        ring = best[1]
+        added.append([round(best[2][0], 2), round(best[2][1], 2)])
+    return [list(point) for point in ring], added
+
+
 def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch_area=None, max_area=None,
-                                  min_area=None, check_area_tolerance=True):
-    """The outline built from the picked corners (pieces, if it crosses itself), checked against the sketch's area."""
+                                  min_area=None, check_area_tolerance=True, complete_from=None):
+    """The outline built from the picked corners (pieces, if it crosses itself), checked against the sketch's area.
+    complete_from is a room's sketch: a corner the reply says is missing is put back from it (complete_missing_corners)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("corners"), list):
         raise ValueError("The reply must list the corner numbers in order around the outline.")
     picked = []
@@ -844,7 +889,10 @@ def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch
         picked.pop()
     if len(set(picked)) < 3:
         raise ValueError("List at least three different corners around the outline.")
-    parts, repaired = outline_parts([tuple(corners[number - 1]) for number in picked], subject)
+    points, completed = [tuple(corners[number - 1]) for number in picked], []
+    if complete_from and str(reply.get("missing_sides") or "").strip():
+        points, completed = complete_missing_corners(points, complete_from)
+    parts, repaired = outline_parts(points, subject)
     built = sum(Polygon(part).area for part in parts)
     if sketch_area is None and sketch_points and len(sketch_points) >= 3:
         sketch_area = Polygon(sketch_points).buffer(0).area
@@ -876,7 +924,8 @@ def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch
         raise ValueError(f"The listed corners enclose {area_feedback()}, more than the whole tenancy; list only the "
                          f"corners around {subject}.")
     return {"corners": picked, "parts": parts, "repaired": repaired,
-            "missing_sides": str(reply.get("missing_sides", ""))[:300]}
+            "missing_sides": str(reply.get("missing_sides", ""))[:300],
+            **({"completed_corners": completed} if completed else {})}
 
 
 def validate_unnamed_space_reply(reply, traced_names, transform, dwelling=False):

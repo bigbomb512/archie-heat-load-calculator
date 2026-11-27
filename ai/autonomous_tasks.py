@@ -235,6 +235,7 @@ def validate_p0_outline_corners(packet, reply):
     # and good corner answers were refused for differing from it. A room may not exceed the corner-built tenancy.
     # A room's corners may enclose more than its sketch (the sketch may be a fragment of the room) but not much less:
     # on the Turramurra house (2026-11-20) three corners made the kitchen a 4.4 m² triangle of its 13.8 m² sketch.
+    # When the reply identifies a missing numbered corner, use the sketch to restore that corner before checking area.
     room = packet.get("room")
     return room_outline.validate_corner_outline_reply(parse_json_reply(reply), packet["corners"], packet.get("sketch"),
                                                       room or "the tenancy",
@@ -242,7 +243,8 @@ def validate_p0_outline_corners(packet, reply):
                                                       max_area=packet.get("tenancy_area_px") if room else None,
                                                       min_area=(CORNER_MIN_SKETCH_SHARE * packet["sketch_area_px"]
                                                                 if room and packet.get("sketch_area_px") else None),
-                                                      check_area_tolerance=False)
+                                                      check_area_tolerance=False,
+                                                      complete_from=packet.get("sketch") if room else None)
 
 
 def validate_p0_unnamed_space(packet, reply):
