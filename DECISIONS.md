@@ -5,6 +5,19 @@ questions the build skipped. A person must decide them.
 
 <!-- Newest first. -->
 
+## 2026-11-27 — PR #33 now targets main and carries #31
+- **Choice:** #31 (quick-fix save test and its two fixes) was closed without merging, while #33 was stacked on its
+  branch. #33 was pointed at main and main merged into it (no conflicts; both checks exit 0, 117 Playwright passed), so
+  merging #33 lands both.
+- **Undo:** point #33 back at `auto/quick-fix-save-test` and reopen #31.
+
+## 2026-11-27 — Decision (person): next Build queue, tasks 6–11
+- **Decision:** scoreboard baseline, building-feature coverage map, windows on a wall, self-checks, stale-value checks,
+  dependency PR checks, in that order. The coverage map was added because houses vary a lot (split levels, voids,
+  granny flats, alterations); the rule stays that work must help every job, so it maps which features the permitted
+  cases cover and where the scoreboard fails, instead of adding handling for one building.
+- **Undo:** reorder or remove the items in the Build queue.
+
 ## 2026-11-27 — Decision (person): wall-legend notes stay for review
 - **Decision:** keep the notes for review until an engineer approves a method. The reader finds labels such as "Dincel
   200", "brick cavity" and "stud wall" and records the page. It identifies neither a U-value nor which walls use the
