@@ -435,6 +435,14 @@ def _row_depends_on(row, changed):
 
 
 def _build(web, project):
+    # The domain resolvers and the preliminary assembler read many of the same
+    # saved inputs. Keep their existing state-aware memo for the whole resolve,
+    # including the first pack resolution before assembly.
+    with ai_preliminary_service._one_computation():
+        return _build_inputs(web, project)
+
+
+def _build_inputs(web, project):
     paths = _paths(project)
     try:
         from backend import room_inference_service
