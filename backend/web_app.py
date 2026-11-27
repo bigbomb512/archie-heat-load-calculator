@@ -440,12 +440,12 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as error:
                 return self.send_json(product_error(error), 400)
         if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary", "/api/job-summary", "/api/result-label",
-                                        "/api/ac-design-input", "/api/assumption-range", "/api/architect-questions"}:
+                                        "/api/ac-design-input", "/api/assumption-range", "/api/architect-questions", "/api/unit-sizes"}:
             try:
                 handler = {"/api/setpoint-comparison": api_setpoint_comparison, "/api/heating-summary": api_heating_summary,
                            "/api/job-summary": api_job_summary, "/api/result-label": api_result_label, "/api/ac-design-input": api_ac_design_input,
                            "/api/assumption-range": api_assumption_range,
-                           "/api/architect-questions": api_architect_questions}[urlparse(self.path).path]
+                           "/api/architect-questions": api_architect_questions, "/api/unit-sizes": api_unit_sizes}[urlparse(self.path).path]
                 return self.send_json(handler(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
@@ -2785,6 +2785,35 @@ def api_setpoint_comparison(request):
     security.require_project_role(project, request._identity(), "viewer")
     from backend import setpoint_comparison_service
     return {"project_id": project["id"], **setpoint_comparison_service.get(project)}
+
+
+def api_unit_sizes(request):
+    """Read-only: the unit sizes the contractor's report suggests (one ducted system for the whole building, or a
+    split per room), from the job's saved final load. Nothing is shown for a final load that is out of date."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import ai_preliminary_service, contractor_report, job_plan_service
+    plan = job_plan_service.get(sys.modules[__name__], project)
+    status = plan.get("status") or {}
+    peak = (plan.get("final_report") or {}).get("included_scope_peak") or {}
+    total = peak.get("final_design_total_kw", peak.get("design_total_kw"))
+    if not status.get("results_ready") or total is None:
+        return {"project_id": project["id"], "status": "not_calculated", "reason": "The final load hasn't been calculated."}
+    if status.get("result_stale"):
+        return {"project_id": project["id"], "status": "stale", "reason": "The final load is out of date; update it first."}
+    paths = ai_preliminary_service._paths(project)
+    full = load_json(paths["report"]) if paths["report"].exists() else {}
+    input_set = load_json(paths["current_set"]) if paths["current_set"].exists() else {}
+    plan_rooms = [row for row in plan.get("rooms", []) if isinstance(row, dict) and row.get("name")]
+    dwelling = ((input_set.get("room_use_resolution") or {}).get("dwelling_context") or {}).get("is_dwelling") is True
+    config = contractor_report.sizes()
+    return {"project_id": project["id"], "status": "calculated", "dwelling": dwelling,
+            "ducted": contractor_report.ducted(total, dwelling),
+            "rooms": contractor_report.room_sizing(full, plan_rooms),
+            "rule": config.get("rule", ""), "rating_note": config.get("rating_note", ""),
+            "wall_split_kw": config.get("wall_split_kw", []), "ducted_kw": config.get("ducted_kw", []),
+            "sources": [text for text in (config.get("wall_split_source"), config.get("ducted_source")) if text]}
 
 
 def api_heating_summary(request):

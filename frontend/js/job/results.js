@@ -530,6 +530,10 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
         </table></div>
       </section>
     </div>
+    ${stale ? "" : `<section class="job-panel" aria-labelledby="unit-sizes-title" data-unit-sizes-panel>
+      <h2 id="unit-sizes-title">Unit sizes to consider</h2>
+      <div data-unit-sizes-body><p class="job-muted" role="status">Loading…</p></div>
+    </section>`}
     ${stale ? "" : `<section class="job-panel" aria-labelledby="range-title" data-range-panel>
       <h2 id="range-title">What could change the number</h2>
       <div data-range-body><p class="job-muted" role="status">Loading…</p></div>
@@ -549,6 +553,30 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
       <div data-heating-body><p class="job-muted" role="status">Loading the heating result…</p></div>
     </section>
     <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
+}
+
+// The sizes the job's report suggests (backend/contractor_report.py), read from the saved final load: one ducted
+// system for the whole building, or a split in each room at the room's own worst hour. Nothing is sized here.
+function unitSizesContent(sizes, dwelling) {
+  if (sizes?.status !== "calculated") {
+    return `<p class="job-muted" data-unit-sizes-missing>Not shown. ${escapeHtml(sizes?.reason || "The unit sizes couldn't be read.")}</p>`;
+  }
+  const duct = sizes.ducted || {};
+  const where = dwelling || sizes.dwelling ? "house" : "building";
+  const when = (row) => [row.month, Number.isInteger(row.hour) ? hourLabel(row.hour) : ""].filter(Boolean).join(" ") || "Not recorded";
+  const rows = (sizes.rooms || [])
+    .map((row) => `<tr><th scope="row">${escapeHtml(row.name)}${row.level ? ` <span class="job-muted">${escapeHtml(row.level)}</span>` : ""}</th><td>${escapeHtml(when(row))}</td><td>${fmt(row.load_kw)}</td><td data-unit-size>${escapeHtml(row.suggested || "")}</td><td>${escapeHtml(row.note || "")}</td></tr>`)
+    .join("");
+  const steps = (values) => (values || []).map((value) => String(value)).join(", ");
+  return `<p data-unit-ducted>One ducted system for the whole ${where}: nominal size <strong>${escapeHtml(duct.suggested || "")}</strong>, for the ${where}'s load of ${fmt(duct.load_kw)} kW at its busiest hour. ${escapeHtml(duct.note || "")}</p>
+      <p class="job-caption">Sized on the whole ${where} at one hour, because rooms peak at different times.</p>
+      <h3>Or a split system in each room</h3>
+      <p class="job-caption">Each room at its own worst hour of the year, with fan heat. Split systems in every room add up to more than one ducted system, because rooms don't all peak together.</p>
+      <div class="job-table-wrap"><table class="job-results-table" data-unit-rooms>
+        <thead><tr><th scope="col">Room</th><th scope="col">Worst hour</th><th scope="col">Load kW</th><th scope="col">Nominal size</th><th scope="col">Note</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5">No room loads.</td></tr>'}</tbody>
+      </table></div>
+      <p class="job-caption">${escapeHtml(sizes.rule || "")} ${escapeHtml(sizes.rating_note || "")} Size steps: wall splits ${steps(sizes.wall_split_kw)} kW; ducted ${steps(sizes.ducted_kw)} kW (one manufacturer's range; the report lists the source).</p>`;
 }
 
 // How far the saved load could move with the facts the drawings don't settle: every kW is a full calculation with one
@@ -722,7 +750,13 @@ function bindHeatingReport(projectId) {
 
 // The comparison and the heating result are read after the page shows: the comparison's first read after a new
 // result is calculated on the server, and the rest of the results shouldn't wait for it.
-async function loadExtraPanels(projectId, planRooms) {
+async function loadExtraPanels(projectId, planRooms, dwelling) {
+  const unitBody = document.querySelector("[data-unit-sizes-body]");
+  if (unitBody) {
+    getJson(`/api/unit-sizes${query(projectId)}`)
+      .catch((error) => ({ status: "not_calculated", reason: `The unit sizes couldn't be read: ${error.message}` }))
+      .then((sizes) => { unitBody.innerHTML = unitSizesContent(sizes, dwelling); });
+  }
   const setpointBody = document.querySelector("[data-setpoint-body]");
   const heatingBody = document.querySelector("[data-heating-body]");
   const heatingButton = document.querySelector("[data-create-heating-report]");
@@ -817,7 +851,7 @@ export async function renderResults(projectId) {
       bindReport(projectId);
       bindHeatingReport(projectId);
       bindRoomToggles();
-      loadExtraPanels(projectId, plan.rooms || []);
+      loadExtraPanels(projectId, plan.rooms || [], Boolean(status.dwelling));
       loadRangeAndArchitect(projectId);
       document
         .querySelector("#job-update-final")
