@@ -153,3 +153,51 @@ test("leaving with unsaved fixes asks first; staying keeps them", async ({ page 
   await expect(page).toHaveURL(new RegExp(`#/job/${projectId}/fix$`));
   await expect(living(page).locator('[data-field="name"]')).toHaveValue("Lounge");
 });
+
+test("Cancel with no unsaved fixes leaves at once", async ({ page }) => {
+  await openFix(page);
+  await page.getByRole("link", { name: "Cancel" }).click();
+  await expect(page).toHaveURL(new RegExp(`#/job/${projectId}/results$`));
+});
+
+test("a value changed back is not an unsaved fix: Cancel leaves without asking", async ({ page }) => {
+  await openFix(page);
+  const name = living(page).locator('[data-field="name"]');
+  await name.fill("Lounge");
+  await name.fill("Living");
+  await page.getByRole("link", { name: "Cancel" }).click();
+  await expect(page).toHaveURL(new RegExp(`#/job/${projectId}/results$`));
+});
+
+test("Cancel with unsaved fixes asks: Keep editing keeps them, Discard fixes leaves", async ({ page }) => {
+  let browserDialog = false;
+  page.on("dialog", (dialog) => { browserDialog = true; return dialog.dismiss(); });
+  await openFix(page);
+  await living(page).locator('[data-field="area_m2"]').fill("31.5");
+  const cancel = page.getByRole("link", { name: "Cancel" });
+  await cancel.click();
+  const ask = page.getByRole("alertdialog", { name: "Discard unsaved fixes?" });
+  await expect(ask).toBeVisible();
+  await expect(ask.getByRole("button", { name: "Keep editing" })).toBeFocused();
+  await expect(page).toHaveURL(new RegExp(`#/job/${projectId}/fix$`));
+  await ask.getByRole("button", { name: "Keep editing" }).click();
+  await expect(ask).toBeHidden();
+  await expect(cancel).toBeFocused();
+  await expect(living(page).locator('[data-field="area_m2"]')).toHaveValue("31.5");
+  await cancel.click();
+  await page.keyboard.press("Escape");
+  await expect(ask).toBeHidden();
+  await cancel.click();
+  await ask.getByRole("button", { name: "Discard fixes" }).click();
+  await expect(page).toHaveURL(new RegExp(`#/job/${projectId}/results$`));
+  expect(browserDialog).toBe(false);
+});
+
+test("after a save, only later edits count as unsaved", async ({ page }) => {
+  await openFix(page, { calculation: (route) => route.fulfill({ json: { status: "failed", error: "The weather file is missing." } }) });
+  await living(page).locator('[data-field="people"]').fill("5");
+  await page.locator("#job-fix-save").click();
+  await expect(page.locator("#job-fix-status")).toContainText("Saved, but the load didn't update");
+  await page.getByRole("link", { name: "Cancel" }).click();
+  await expect(page).toHaveURL(new RegExp(`#/job/${projectId}/results$`));
+});

@@ -117,7 +117,12 @@ function content(data, projectId) {
       </section>
       <div class="job-fix-actions">
         <button class="job-button" type="submit" id="job-fix-save">Save and update the load</button>
-        <a class="job-link-button" href="#/job/${encodeURIComponent(projectId)}/${data.status?.results_ready ? "results" : "rooms"}">Cancel</a>
+        <a class="job-link-button" href="#/job/${encodeURIComponent(projectId)}/${data.status?.results_ready ? "results" : "rooms"}" data-fix-cancel>Cancel</a>
+        <div class="job-fix-discard" role="alertdialog" aria-labelledby="job-fix-discard-title" data-fix-discard hidden>
+          <p id="job-fix-discard-title">Discard unsaved fixes?</p>
+          <button class="job-button secondary" type="button" data-fix-keep>Keep editing</button>
+          <button class="job-button" type="button" data-fix-discard-confirm>Discard fixes</button>
+        </div>
         <p class="job-note" role="status" id="job-fix-status"></p>
       </div>
     </form>`;
@@ -221,11 +226,13 @@ export async function renderFix(projectId) {
         });
       });
       // Unsaved fixes aren't lost by accident: closing or reloading the tab, or leaving for another screen, asks first.
-      let dirty = false;
-      const warnUnload = (event) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
+      // Unsaved means the form still differs from what was last saved: a value typed and changed back isn't a change.
+      let savedState = JSON.stringify({ rooms: [], windows: [] });
+      const unsaved = () => JSON.stringify(collectChanges(form, data)) !== savedState;
+      const warnUnload = (event) => { if (unsaved()) { event.preventDefault(); event.returnValue = ""; } };
       const guardLinks = (event) => {
         const link = event.target.closest("a[href]");
-        if (!dirty || !link || form.contains(link)) return;
+        if (!link || form.contains(link) || !unsaved()) return;
         if (!window.confirm("Leave without saving your fixes? They will be lost.")) event.preventDefault();
       };
       const stop = () => {
@@ -233,7 +240,23 @@ export async function renderFix(projectId) {
         document.removeEventListener("click", guardLinks, true);
         window.removeEventListener("hashchange", stop);
       };
-      form.addEventListener("input", () => { dirty = true; });
+      // Cancel leaves at once when nothing is unsaved; otherwise it asks first, in the save bar.
+      const cancel = form.querySelector("[data-fix-cancel]");
+      const discard = form.querySelector("[data-fix-discard]");
+      const keep = form.querySelector("[data-fix-keep]");
+      const closeDiscard = () => { discard.hidden = true; cancel.focus(); };
+      cancel.addEventListener("click", (event) => {
+        if (!unsaved()) return;
+        event.preventDefault();
+        discard.hidden = false;
+        keep.focus();
+      });
+      keep.addEventListener("click", closeDiscard);
+      discard.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDiscard(); });
+      form.querySelector("[data-fix-discard-confirm]").addEventListener("click", () => {
+        stop();
+        location.hash = cancel.getAttribute("href");
+      });
       window.addEventListener("beforeunload", warnUnload);
       document.addEventListener("click", guardLinks, true);
       window.addEventListener("hashchange", stop);
@@ -249,7 +272,7 @@ export async function renderFix(projectId) {
         let saved = null;
         try {
           saved = await sendJson("/api/quick-fix", { project_id: projectId, ...changes, reviewer: "Quick fixes" });
-          dirty = false;
+          savedState = JSON.stringify(changes);
           line.textContent = `Saved: ${saved.applied.join(" ")} Updating the load…`;
           const status = data.status || {};
           if (status.phase1_complete || status.result_exists)
