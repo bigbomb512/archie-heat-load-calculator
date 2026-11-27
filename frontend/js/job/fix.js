@@ -117,11 +117,19 @@ function content(data, projectId) {
       </section>
       <div class="job-fix-actions">
         <button class="job-button" type="submit" id="job-fix-save">Save and update the load</button>
-        <a class="job-link-button" href="#/job/${encodeURIComponent(projectId)}/${data.status?.results_ready ? "results" : "rooms"}">Cancel</a>
+        <a class="job-link-button" href="#/job/${encodeURIComponent(projectId)}/${data.status?.results_ready ? "results" : "rooms"}" data-fix-cancel>Cancel</a>
+        <div class="job-fix-discard" role="alertdialog" aria-labelledby="job-fix-discard-title" data-fix-discard hidden>
+          <p id="job-fix-discard-title">Discard unsaved fixes?</p>
+          <button class="job-button secondary" type="button" data-fix-keep>Keep editing</button>
+          <button class="job-button" type="button" data-fix-discard-confirm>Discard fixes</button>
+        </div>
         <p class="job-note" role="status" id="job-fix-status"></p>
       </div>
     </form>`;
 }
+
+// An empty box is sent empty, not as 0, so the server asks for the number instead of saying 0 is out of range.
+const typedNumber = (text) => (text === "" || text === undefined ? "" : Number(text));
 
 function value(row, field) {
   const input = row.querySelector(`[data-field="${field}"]`);
@@ -157,7 +165,7 @@ export function collectChanges(form, data) {
     if (glass === "drawings") {
       if (fix.glass) change.glass = "drawings";
     } else if (glass === "other") {
-      const typed = { u_value_w_m2k: Number(value(row, "glass_u")), shgc: Number(value(row, "glass_shgc")), source: value(row, "glass_source") };
+      const typed = { u_value_w_m2k: typedNumber(value(row, "glass_u")), shgc: typedNumber(value(row, "glass_shgc")), source: value(row, "glass_source") };
       if (!fix.glass || typed.u_value_w_m2k !== fix.glass.u_value_w_m2k || typed.shgc !== fix.glass.shgc || typed.source !== (fix.glass.source || ""))
         change.glass = typed;
     } else {
@@ -172,7 +180,7 @@ export function collectChanges(form, data) {
     if (kind === "none") {
       if (fix.shade !== null) change.shade = "none";
     } else if (kind) {
-      const shade = { kind, depth_m: Number(value(row, "shade_depth")) };
+      const shade = { kind, depth_m: typedNumber(value(row, "shade_depth")) };
       const gap = value(row, "shade_gap");
       if (gap !== "") shade.gap_m = Number(gap);
       const old = fix.shade || {};
@@ -218,11 +226,13 @@ export async function renderFix(projectId) {
         });
       });
       // Unsaved fixes aren't lost by accident: closing or reloading the tab, or leaving for another screen, asks first.
-      let dirty = false;
-      const warnUnload = (event) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
+      // Unsaved means the form still differs from what was last saved: a value typed and changed back isn't a change.
+      let savedState = JSON.stringify({ rooms: [], windows: [] });
+      const unsaved = () => JSON.stringify(collectChanges(form, data)) !== savedState;
+      const warnUnload = (event) => { if (unsaved()) { event.preventDefault(); event.returnValue = ""; } };
       const guardLinks = (event) => {
         const link = event.target.closest("a[href]");
-        if (!dirty || !link || form.contains(link)) return;
+        if (!link || form.contains(link) || !unsaved()) return;
         if (!window.confirm("Leave without saving your fixes? They will be lost.")) event.preventDefault();
       };
       const stop = () => {
@@ -230,7 +240,23 @@ export async function renderFix(projectId) {
         document.removeEventListener("click", guardLinks, true);
         window.removeEventListener("hashchange", stop);
       };
-      form.addEventListener("input", () => { dirty = true; });
+      // Cancel leaves at once when nothing is unsaved; otherwise it asks first, in the save bar.
+      const cancel = form.querySelector("[data-fix-cancel]");
+      const discard = form.querySelector("[data-fix-discard]");
+      const keep = form.querySelector("[data-fix-keep]");
+      const closeDiscard = () => { discard.hidden = true; cancel.focus(); };
+      cancel.addEventListener("click", (event) => {
+        if (!unsaved()) return;
+        event.preventDefault();
+        discard.hidden = false;
+        keep.focus();
+      });
+      keep.addEventListener("click", closeDiscard);
+      discard.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDiscard(); });
+      form.querySelector("[data-fix-discard-confirm]").addEventListener("click", () => {
+        stop();
+        location.hash = cancel.getAttribute("href");
+      });
       window.addEventListener("beforeunload", warnUnload);
       document.addEventListener("click", guardLinks, true);
       window.addEventListener("hashchange", stop);
@@ -243,9 +269,10 @@ export async function renderFix(projectId) {
         }
         save.disabled = true;
         line.textContent = "Saving…";
+        let saved = null;
         try {
-          const saved = await sendJson("/api/quick-fix", { project_id: projectId, ...changes, reviewer: "Quick fixes" });
-          dirty = false;
+          saved = await sendJson("/api/quick-fix", { project_id: projectId, ...changes, reviewer: "Quick fixes" });
+          savedState = JSON.stringify(changes);
           line.textContent = `Saved: ${saved.applied.join(" ")} Updating the load…`;
           const status = data.status || {};
           if (status.phase1_complete || status.result_exists)
@@ -257,7 +284,10 @@ export async function renderFix(projectId) {
             navigate(projectId, "rooms");
           }
         } catch (error) {
-          line.textContent = `Not saved or not updated: ${error.message}`;
+          // Once the fixes are saved, a failed update must not read as a failed save: saving again only retries it.
+          line.textContent = saved
+            ? `Saved, but the load didn't update: ${error.message} Save again to retry the update.`
+            : `Not saved: ${error.message}`;
           save.disabled = false;
         }
       });
