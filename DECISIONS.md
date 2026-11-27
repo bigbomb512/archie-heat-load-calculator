@@ -5,6 +5,30 @@ questions the build skipped. A person must decide them.
 
 <!-- Newest first. -->
 
+## 2026-11-28 — Task 9: self-check limits (provisional)
+- **Choice:** a result stays Preliminary while any room on the room list isn't counted; for houses, also while fewer
+  than 75% of the scheduled windows are on a wall, or while the load is outside 39–108 W per cooled m². The checked
+  set 17 placed 86% of its windows and the PDF-only runs 54%. The checked houses are 49, 83 and 90 W/m², and the band
+  runs 20% beyond the lowest and highest. Zero-load rooms aren't cooled floor. Labels only; no load value changes.
+- **Why:** only three houses have checked answers, so these limits are a first cut. Revisit them when more checked
+  houses exist.
+- **Undo:** change `WINDOWS_PLACED_SHARE` / `HOUSE_W_PER_M2` in `backend/result_self_checks.py`, or drop the call in
+  `result_label_service`.
+
+## 2026-11-28 — Tasks 8 and 10 re-scoped from what the data showed
+- **Task 8:** windows placed only by a label are 0–4 per job, and those rooms have no outline to take a facing from.
+  The real loss was rotated tags (printed up the page) that were never read. That was fixed instead (PR #39). It moves
+  the Turramurra reference from 14.48 to 17.20 kW once its windows are re-placed: 7 real windows, none placed twice.
+- **Task 10:** the safety-factor, site-location and design-weather editors no longer exist. All three inputs are in the
+  result's input fingerprint. The one stale path, a weather pick made from an earlier address, is now labelled
+  (PR #41); the location is kept so no load moves silently.
+- **Undo:** close the PRs; the original task text is unchanged in the Build queue.
+
+## 2026-11-28 — Task 11 blocked
+- **Choice:** not tested locally, because installing the new versions needs a download. Posting the findings as PR
+  comments was refused by the session's permission settings. The findings are in the session summary in `TODO.md`.
+- **Undo:** n/a. A person can post them, or allow `gh pr comment`.
+
 ## 2026-11-27 — PR #33 now targets main and carries #31
 - **Choice:** #31 (quick-fix save test and its two fixes) was closed without merging, while #33 was stacked on its
   branch. #33 was pointed at main and main merged into it (no conflicts; both checks exit 0, 117 Playwright passed), so

@@ -43,12 +43,12 @@ or new calculation values. Order is priority; a person reorders it.
 5. [x] (open PR, not merged: [PR #35](https://github.com/bigbomb512/archie-heat-load-calculator/pull/35)) Fix the tests that fail now and then in full runs
    (`job-preview.spec.mjs:296`, `room-joins.spec.mjs`). Cause: the web server's listen queue of 5 dropped some of a
    page load's ~20 connections on a busy machine; raised to 128, with a regression test.
-6. [ ] House scoreboard baseline: run `tools/score_house_pdf_only.py` on copies of the saved jobs for sets 15–20
+6. [x] (open PR, not merged: [PR #37](https://github.com/bigbomb512/archie-heat-load-calculator/pull/37); sets 16, 17, 18 scored; 15, 19, 20 have no checked job here) House scoreboard baseline: run `tools/score_house_pdf_only.py` on copies of the saved jobs for sets 15–20
    (cases file under `output/`, never the saved jobs themselves) with today's code, no AI calls. Record a table in
    `docs/` with neutral labels (house15…house20), not addresses: PDF-only kW vs checked kW, whether PDF-only said
    complete, checked floor covered, PDF-only floor outside, rooms missed, glass by facing. Where a set has no checked
    job, say so instead of scoring it. This is the number later tasks must beat.
-7. [ ] Building-feature coverage map: for each permitted case (sets 15–20, Butcher Buffet, Global Exchange,
+7. [x] (open PR, not merged: [PR #38](https://github.com/bigbomb512/archie-heat-load-calculator/pull/38)) Building-feature coverage map: for each permitted case (sets 15–20, Butcher Buffet, Global Exchange,
    mini-split), record from its saved job and drawings which building features it has: storeys and split levels,
    basement or lower ground, voids and double-height rooms, raked/skillion/cathedral ceilings, attached garage, granny
    flat or second dwelling, duplex or townhouse, alterations and additions (existing + new), large glazing or
@@ -56,19 +56,19 @@ or new calculation values. Order is priority; a person reorders it.
    Then list, per feature, which cases cover it and how the scoreboard (task 6) did on them. Output: a table in
    `evaluations/README.md` and a "features we have no permitted case for" list. This decides which new training PDFs
    to ask for. Don't add handling for any one feature in this task.
-8. [ ] Place windows on a wall: windows given a room only by the nearest printed label have no wall or facing, so their
+8. [x] (re-scoped; open PR, not merged: [PR #39](https://github.com/bigbomb512/archie-heat-load-calculator/pull/39): tags printed up the page were never read, so windows on walls running up the sheet were missed; label-only windows are rare, 0–4 per job. **Moves the Turramurra reference 14.48 → 17.20 kW** once its windows are re-placed) Place windows on a wall: windows given a room only by the nearest printed label have no wall or facing, so their
    sun is averaged (17 of set 17's 28 on the old traces). Assign each to the nearest edge of its room's outline when
    the window lies within a set distance of it, and take the facing from that edge and the page's north; keep the
    averaged, labelled fallback when no edge is close. Report how many windows got a facing per set (task 6 copies).
    This changes loads: run the Turramurra check and explain any change over 1%.
-9. [ ] Self-checks, so a PDF-only result never says "complete" when it isn't: mark it incomplete, with the reason, when
+9. [x] (open PR, not merged: [PR #40](https://github.com/bigbomb512/archie-heat-load-calculator/pull/40); rooms not counted, windows placed, W/m²; the printed-total-floor-area check isn't done: no reader for it yet) Self-checks, so a PDF-only result never says "complete" when it isn't: mark it incomplete, with the reason, when
    the cooled floor falls well short of a printed total floor area, a cooled room has no outline, a plan level was
    never read, or the load per m² is outside the range of the checked houses (from task 6). The limits must come from
    task 6's table and are recorded in DECISIONS.md. This changes labels only, never a load value.
-10. [ ] Stale-value checks for the safety-factor, site-location and design-weather editors (from "Open implementation
+10. [x] (re-scoped; open PR, not merged: [PR #41](https://github.com/bigbomb512/archie-heat-load-calculator/pull/41): the three editors no longer exist; the one stale path was a weather pick from an earlier address) Stale-value checks for the safety-factor, site-location and design-weather editors (from "Open implementation
     and validation work"): after an input changes, each must show its saved value as out of date, not current. Add a
     test for each.
-11. [ ] Dependency update PRs: run both checks on the branches of #21 (Playwright 1.65), #13 (cryptography), #15 (pvlib)
+11. [blocked] (posting PR comments was refused by the session's permission settings; installing the new versions needs a download, which these runs don't do. Findings below) Dependency update PRs: run both checks on the branches of #21 (Playwright 1.65), #13 (cryptography), #15 (pvlib)
     and #16 (shapely), in their own worktrees. Comment the result on each PR. Don't merge. pvlib feeds sun angles: if
     it changes any load, report the Turramurra kW and mark it [needs engineer] rather than accepting it.
 
@@ -79,6 +79,29 @@ manufacturer data from the web), wall-legend U-values, safety-factor, sign-polic
 ### Session summaries
 
 <!-- Autonomous sessions add a dated summary here: done, PRs, blocked, needs a decision. -->
+
+**2026-11-28.** Tasks 6–10 done as open PRs (none merged); task 11 blocked. Each PR passed the smoke gate after its
+last change, and Playwright where frontend files changed (#40: 106 passed).
+- Task 6, [PR #37](https://github.com/bigbomb512/archie-heat-load-calculator/pull/37): PDF-only vs checked 19.6/41.3, 11.2/14.5, 21.5/27.3 kW (−52%, −23%, −22%). All three said
+  complete. Glass found is 9–41% of checked. Set 18's north is 95° out. The scoreboard tool now takes a stand-in PDF
+  (same SHA-256), records jobs it can't calculate, and doesn't count zero-load rooms as cooled floor. Set 15's
+  checked job isn't on this machine.
+- Task 7, [PR #38](https://github.com/bigbomb512/archie-heat-load-calculator/pull/38): `tools/building_features.py`, a text-layer coverage map. All six houses are large
+  multi-storey CAD sets with a basement. No case is single-storey, split-level, attached, scanned or names a raked
+  ceiling. The list of PDFs to ask for is in `evaluations/README.md`.
+- Task 8, [PR #39](https://github.com/bigbomb512/archie-heat-load-calculator/pull/39): window tags printed up the page are now read (set 16: 9 of 28 windows were missed).
+  **The Turramurra reference becomes 17.20 kW (+18.8%)** once its windows are re-placed: 7 real windows that the
+  reference also missed. Update `CLAUDE.md`'s 14.48 kW when it merges.
+- Task 9, [PR #40](https://github.com/bigbomb512/archie-heat-load-calculator/pull/40): self-checks keep a result Preliminary and say why (rooms not counted, under 75% of
+  scheduled windows placed, outside 39–108 W/m² for houses). The limits are provisional (DECISIONS.md).
+- Task 10, [PR #41](https://github.com/bigbomb512/archie-heat-load-calculator/pull/41): the editors are gone. A weather pick made from an earlier address is now labelled out of
+  date. Noticed: one Butcher Buffet job (`…1792650630`) has its weather picked as Adelaide (Melrose Park, SA).
+- Task 11, blocked. From CI on each branch: #13 (cryptography) and #15 (pvlib) passed the smoke gate on 26 Nov;
+  #21 (Playwright 1.65) passed it on 25 Nov, but CI doesn't run Playwright; #16 (shapely) last ran on 14 Oct and
+  failed on a missing `pdfplumber`, from before that was a requirement, so it needs a rebase (`@dependabot rebase`).
+  Before merging, run the Turramurra check with pvlib 0.16.1 and the Playwright suite with 1.65.1.
+- Needs a decision: (1) the self-check limits; (2) the new Turramurra reference figure; (3) the Butcher Buffet weather
+  location. The Build queue has no tasks left.
 
 **2026-11-27.** All four queue tasks closed. Each PR was branched from main and passed both checks after its last change
 (smoke gate; headless `npx playwright test`). None is merged.
