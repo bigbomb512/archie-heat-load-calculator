@@ -169,6 +169,9 @@ CLIENT_GONE_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedEr
 class ArchieHTTPServer(ThreadingHTTPServer):
     """The web server, quiet about browsers that leave before their answer is sent (a static file cut short)."""
 
+    # A page load opens ~20 connections at once; the default queue of 5 dropped some on a busy machine (2026-11-27).
+    request_queue_size = 128
+
     def handle_error(self, request, client_address):
         if isinstance(sys.exc_info()[1], CLIENT_GONE_ERRORS):
             return
