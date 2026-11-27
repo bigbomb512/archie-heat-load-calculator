@@ -1,0 +1,1320 @@
+{
+  "turra_live2_page_8": {
+    "packet": {
+      "room_names": [
+        "ALFRESCO",
+        "BEDROOM 5",
+        "Bedroom 5",
+        "DINING",
+        "Dining",
+        "EN S U ITE",
+        "ENTRY",
+        "Ensuite",
+        "Entry",
+        "GARAGE",
+        "Garage",
+        "KITCHEN",
+        "Kitchen",
+        "LAUNDRY",
+        "LINEN",
+        "LIVING",
+        "Linen",
+        "Living",
+        "MEDIA",
+        "Media",
+        "SCULLERY",
+        "SITTING",
+        "STUDY",
+        "Sitting",
+        "Study",
+        "W IR"
+      ],
+      "transform": {
+        "offset_px": [
+          540.87,
+          145.51
+        ],
+        "factor": 0.5303867403314917
+      },
+      "dwelling": true,
+      "page": 8
+    },
+    "reply": {
+      "rooms": [
+        {
+          "room": "ALFRESCO",
+          "points_px": [
+            [
+              978,
+              290
+            ],
+            [
+              1135,
+              290
+            ],
+            [
+              1135,
+              580
+            ],
+            [
+              975,
+              580
+            ]
+          ],
+          "open_sides": "Open to the Entertainment Area and Clothes Drying Area on the east side, and to the Dining room through the opening on the west side"
+        },
+        {
+          "room": "BEDROOM 5",
+          "points_px": [
+            [
+              230,
+              655
+            ],
+            [
+              365,
+              655
+            ],
+            [
+              365,
+              800
+            ],
+            [
+              230,
+              800
+            ]
+          ],
+          "open_sides": "Bottom side has windows W07 and W06 in the wall; the other sides are walls"
+        },
+        {
+          "room": "Bedroom 5",
+          "points_px": [
+            [
+              230,
+              655
+            ],
+            [
+              365,
+              655
+            ],
+            [
+              365,
+              800
+            ],
+            [
+              230,
+              800
+            ]
+          ],
+          "open_sides": "Bottom side has windows W07 and W06 in the wall; the other sides are walls"
+        },
+        {
+          "room": "DINING",
+          "points_px": [
+            [
+              712,
+              400
+            ],
+            [
+              975,
+              400
+            ],
+            [
+              975,
+              580
+            ],
+            [
+              1010,
+              580
+            ],
+            [
+              1010,
+              652
+            ],
+            [
+              805,
+              652
+            ],
+            [
+              712,
+              652
+            ]
+          ],
+          "open_sides": "North side open to the Kitchen along the benchtop/counter edge; east side open to Alfresco; south side open to Living, and the sitting area is open on the west side"
+        },
+        {
+          "room": "Dining",
+          "points_px": [
+            [
+              712,
+              400
+            ],
+            [
+              975,
+              400
+            ],
+            [
+              975,
+              580
+            ],
+            [
+              1010,
+              580
+            ],
+            [
+              1010,
+              652
+            ],
+            [
+              805,
+              652
+            ],
+            [
+              712,
+              652
+            ]
+          ],
+          "open_sides": "North side open to the Kitchen along the benchtop/counter edge; east side open to Alfresco; south side open to Living, and the sitting area is open on the west side"
+        },
+        {
+          "room": "EN S U ITE",
+          "points_px": [
+            [
+              230,
+              495
+            ],
+            [
+              300,
+              495
+            ],
+            [
+              300,
+              568
+            ],
+            [
+              230,
+              568
+            ]
+          ],
+          "open_sides": "All sides are walls"
+        },
+        {
+          "room": "ENTRY",
+          "points_px": [
+            [
+              530,
+              655
+            ],
+            [
+              645,
+              655
+            ],
+            [
+              645,
+              800
+            ],
+            [
+              530,
+              800
+            ]
+          ],
+          "open_sides": "Open to the Patio through the doorway on the south side; open to Media on the east side through the door opening; open to the Study on the west side"
+        },
+        {
+          "room": "Ensuite",
+          "points_px": [
+            [
+              230,
+              495
+            ],
+            [
+              300,
+              495
+            ],
+            [
+              300,
+              568
+            ],
+            [
+              230,
+              568
+            ]
+          ],
+          "open_sides": "All sides are walls"
+        },
+        {
+          "room": "Entry",
+          "points_px": [
+            [
+              530,
+              655
+            ],
+            [
+              645,
+              655
+            ],
+            [
+              645,
+              800
+            ],
+            [
+              530,
+              800
+            ]
+          ],
+          "open_sides": "Open to the Patio through the doorway on the south side; open to Media on the east side through the door opening; open to the Study on the west side"
+        },
+        {
+          "room": "GARAGE",
+          "points_px": [],
+          "open_sides": ""
+        },
+        {
+          "room": "Garage",
+          "points_px": [],
+          "open_sides": ""
+        },
+        {
+          "room": "KITCHEN",
+          "points_px": [
+            [
+              712,
+              345
+            ],
+            [
+              975,
+              345
+            ],
+            [
+              975,
+              400
+            ],
+            [
+              712,
+              400
+            ]
+          ],
+          "open_sides": "South side open to the Dining room along the benchtop/counter edge; the other sides are walls"
+        },
+        {
+          "room": "Kitchen",
+          "points_px": [
+            [
+              712,
+              345
+            ],
+            [
+              975,
+              345
+            ],
+            [
+              975,
+              400
+            ],
+            [
+              712,
+              400
+            ]
+          ],
+          "open_sides": "South side open to the Dining room along the benchtop/counter edge; the other sides are walls"
+        },
+        {
+          "room": "LAUNDRY",
+          "points_px": [
+            [
+              835,
+              290
+            ],
+            [
+              975,
+              290
+            ],
+            [
+              975,
+              350
+            ],
+            [
+              835,
+              350
+            ]
+          ],
+          "open_sides": "South side open to the Kitchen along the benchtop/counter edge; the other sides are walls"
+        },
+        {
+          "room": "LINEN",
+          "points_px": [
+            [
+              368,
+              655
+            ],
+            [
+              455,
+              655
+            ],
+            [
+              455,
+              720
+            ],
+            [
+              368,
+              720
+            ]
+          ],
+          "open_sides": "South side is open along the JOINERY line; the other sides are walls"
+        },
+        {
+          "room": "LIVING",
+          "points_px": [
+            [
+              810,
+              655
+            ],
+            [
+              1015,
+              655
+            ],
+            [
+              1015,
+              810
+            ],
+            [
+              810,
+              810
+            ]
+          ],
+          "open_sides": "West side open to Media through the wall opening; north side open to Dining; south side has windows W01 in the wall"
+        },
+        {
+          "room": "Linen",
+          "points_px": [
+            [
+              368,
+              655
+            ],
+            [
+              455,
+              655
+            ],
+            [
+              455,
+              720
+            ],
+            [
+              368,
+              720
+            ]
+          ],
+          "open_sides": "South side is open along the JOINERY line; the other sides are walls"
+        },
+        {
+          "room": "Living",
+          "points_px": [
+            [
+              810,
+              655
+            ],
+            [
+              1015,
+              655
+            ],
+            [
+              1015,
+              810
+            ],
+            [
+              810,
+              810
+            ]
+          ],
+          "open_sides": "West side open to Media through the wall opening; north side open to Dining; south side has windows W01 in the wall"
+        },
+        {
+          "room": "MEDIA",
+          "points_px": [
+            [
+              645,
+              655
+            ],
+            [
+              805,
+              655
+            ],
+            [
+              805,
+              862
+            ],
+            [
+              645,
+              862
+            ]
+          ],
+          "open_sides": "West side open to Entry through the door opening; north side is a wall; east side open to Living; south side has windows W03 and W02 in the wall"
+        },
+        {
+          "room": "Media",
+          "points_px": [
+            [
+              645,
+              655
+            ],
+            [
+              805,
+              655
+            ],
+            [
+              805,
+              862
+            ],
+            [
+              645,
+              862
+            ]
+          ],
+          "open_sides": "West side open to Entry through the door opening; north side is a wall; east side open to Living; south side has windows W03 and W02 in the wall"
+        },
+        {
+          "room": "SCULLERY",
+          "points_px": [
+            [
+              680,
+              290
+            ],
+            [
+              835,
+              290
+            ],
+            [
+              835,
+              350
+            ],
+            [
+              680,
+              350
+            ]
+          ],
+          "open_sides": "South side open to the Kitchen along the benchtop/counter edge; the other sides are walls"
+        },
+        {
+          "room": "SITTING",
+          "points_px": [
+            [
+              512,
+              352
+            ],
+            [
+              680,
+              352
+            ],
+            [
+              680,
+              520
+            ],
+            [
+              512,
+              520
+            ]
+          ],
+          "open_sides": "East side open to Dining; south side open to the void above; the other sides are walls"
+        },
+        {
+          "room": "STUDY",
+          "points_px": [
+            [
+              370,
+              730
+            ],
+            [
+              530,
+              730
+            ],
+            [
+              530,
+              862
+            ],
+            [
+              370,
+              862
+            ]
+          ],
+          "open_sides": "East side open to Entry through the opening; south side has windows W05 and W04 in the wall; the other sides are walls"
+        },
+        {
+          "room": "Sitting",
+          "points_px": [
+            [
+              512,
+              352
+            ],
+            [
+              680,
+              352
+            ],
+            [
+              680,
+              520
+            ],
+            [
+              512,
+              520
+            ]
+          ],
+          "open_sides": "East side open to Dining; south side open to the void above; the other sides are walls"
+        },
+        {
+          "room": "Study",
+          "points_px": [
+            [
+              370,
+              730
+            ],
+            [
+              530,
+              730
+            ],
+            [
+              530,
+              862
+            ],
+            [
+              370,
+              862
+            ]
+          ],
+          "open_sides": "East side open to Entry through the opening; south side has windows W05 and W04 in the wall; the other sides are walls"
+        },
+        {
+          "room": "W IR",
+          "points_px": [
+            [
+              233,
+              572
+            ],
+            [
+              325,
+              572
+            ],
+            [
+              325,
+              652
+            ],
+            [
+              233,
+              652
+            ]
+          ],
+          "open_sides": "All sides are walls"
+        }
+      ],
+      "not_drawn": [
+        {
+          "room": "GARAGE",
+          "reason": "No garage is drawn on this plan; the only enclosed rooms are the house rooms, and the large area below the plan is the existing tennis court outside the building."
+        },
+        {
+          "room": "Garage",
+          "reason": "No garage is drawn on this plan; the only enclosed rooms are the house rooms, and the large area below the plan is the existing tennis court outside the building."
+        }
+      ]
+    }
+  },
+  "turra_live2_page_9": {
+    "packet": {
+      "room_names": [
+        "BALCONY",
+        "BEDROOM 3",
+        "E N S U I T E",
+        "GARAGE /",
+        "Garage",
+        "Linen",
+        "R O B E",
+        "STORAGE"
+      ],
+      "transform": {
+        "offset_px": [
+          645.35,
+          515.06
+        ],
+        "factor": 0.6432160804020101
+      },
+      "dwelling": true,
+      "page": 9
+    },
+    "reply": {
+      "rooms": [
+        {
+          "room": "BALCONY",
+          "points_px": [
+            [
+              570,
+              742
+            ],
+            [
+              712,
+              742
+            ],
+            [
+              716,
+              812
+            ],
+            [
+              716,
+              918
+            ],
+            [
+              565,
+              918
+            ],
+            [
+              565,
+              812
+            ]
+          ],
+          "open_sides": "South and side edges open to the drawn balcony edge (no wall); north side follows the wall to the Void/Master Bedroom."
+        },
+        {
+          "room": "BEDROOM 3",
+          "points_px": [
+            [
+              697,
+              268
+            ],
+            [
+              866,
+              268
+            ],
+            [
+              866,
+              470
+            ],
+            [
+              818,
+              470
+            ],
+            [
+              818,
+              428
+            ],
+            [
+              697,
+              428
+            ]
+          ],
+          "open_sides": "none"
+        },
+        {
+          "room": "ENSUITE",
+          "points_px": [
+            [
+              870,
+              272
+            ],
+            [
+              966,
+              272
+            ],
+            [
+              966,
+              412
+            ],
+            [
+              870,
+              412
+            ]
+          ],
+          "open_sides": "none"
+        },
+        {
+          "room": "ROBE",
+          "points_px": [
+            [
+              700,
+              428
+            ],
+            [
+              818,
+              428
+            ],
+            [
+              818,
+              470
+            ],
+            [
+              700,
+              470
+            ]
+          ],
+          "open_sides": "South side open to the Linen/Bedroom 3 floor (no wall, bifold/wardrobe line only)."
+        },
+        {
+          "room": "Linen",
+          "points_px": [
+            [
+              680,
+              472
+            ],
+            [
+              818,
+              472
+            ],
+            [
+              818,
+              500
+            ],
+            [
+              680,
+              500
+            ]
+          ],
+          "open_sides": "North side open to Bedroom 3 floor (no wall, wardrobe line only); south side open to the First Floor Area."
+        }
+      ],
+      "not_drawn": [
+        {
+          "room": "GARAGE /",
+          "reason": "No garage is drawn on this first floor plan; the labelled garage is not shown."
+        },
+        {
+          "room": "Garage",
+          "reason": "No garage is drawn on this first floor plan; the labelled garage is not shown."
+        },
+        {
+          "room": "STORAGE",
+          "reason": "No room labelled or drawn as storage appears on this plan."
+        }
+      ]
+    }
+  },
+  "turra_live3_page_8": {
+    "packet": {
+      "room_names": [
+        "Bedroom 5",
+        "Dining",
+        "Ensuite",
+        "Entry",
+        "Garage",
+        "Kitchen",
+        "Laundry",
+        "Linen",
+        "Living",
+        "Media",
+        "Scullery",
+        "Sitting",
+        "Study",
+        "Wir"
+      ],
+      "transform": {
+        "offset_px": [
+          540.87,
+          145.51
+        ],
+        "factor": 0.5303867403314917
+      },
+      "dwelling": true,
+      "page": 8
+    },
+    "reply": {
+      "rooms": [
+        {
+          "room": "Bedroom 5",
+          "points_px": [
+            [
+              234,
+              655
+            ],
+            [
+              362,
+              655
+            ],
+            [
+              362,
+              800
+            ],
+            [
+              234,
+              800
+            ]
+          ],
+          "open_sides": "none; all sides bounded by walls"
+        },
+        {
+          "room": "Dining",
+          "points_px": [
+            [
+              690,
+              412
+            ],
+            [
+              1012,
+              412
+            ],
+            [
+              1012,
+              652
+            ],
+            [
+              690,
+              652
+            ]
+          ],
+          "open_sides": "west side to Sitting and north side to Kitchen are open plan with no wall, drawn to the joinery edge and counter edge; south side to Media/Living has no wall, drawn to the floor-finish change"
+        },
+        {
+          "room": "Ensuite",
+          "points_px": [
+            [
+              232,
+              497
+            ],
+            [
+              338,
+              497
+            ],
+            [
+              338,
+              570
+            ],
+            [
+              232,
+              570
+            ]
+          ],
+          "open_sides": "none; all sides bounded by walls"
+        },
+        {
+          "room": "Entry",
+          "points_px": [
+            [
+              530,
+              652
+            ],
+            [
+              645,
+              652
+            ],
+            [
+              645,
+              800
+            ],
+            [
+              530,
+              800
+            ],
+            [
+              530,
+              730
+            ]
+          ],
+          "open_sides": "west side to Lift and Study is open with no wall, drawn to the floor-finish change; east side to Media is walled"
+        },
+        {
+          "room": "Kitchen",
+          "points_px": [
+            [
+              712,
+              355
+            ],
+            [
+              975,
+              355
+            ],
+            [
+              975,
+              412
+            ],
+            [
+              712,
+              412
+            ]
+          ],
+          "open_sides": "south side to Dining has no wall, drawn to the counter edge of the bench; west side to Scullery is joinery edge"
+        },
+        {
+          "room": "Laundry",
+          "points_px": [
+            [
+              835,
+              290
+            ],
+            [
+              975,
+              290
+            ],
+            [
+              975,
+              355
+            ],
+            [
+              835,
+              355
+            ]
+          ],
+          "open_sides": "south side to Kitchen has no wall, drawn to the counter edge; other sides bounded by walls"
+        },
+        {
+          "room": "Linen",
+          "points_px": [
+            [
+              368,
+              652
+            ],
+            [
+              455,
+              652
+            ],
+            [
+              455,
+              712
+            ],
+            [
+              368,
+              712
+            ]
+          ],
+          "open_sides": "east side to Entry/Lift is open with no wall, drawn to the floor-finish change"
+        },
+        {
+          "room": "Living",
+          "points_px": [
+            [
+              812,
+              654
+            ],
+            [
+              1012,
+              654
+            ],
+            [
+              1012,
+              810
+            ],
+            [
+              812,
+              810
+            ]
+          ],
+          "open_sides": "north side to Dining has no wall, drawn to the floor-finish change; other sides bounded by walls"
+        },
+        {
+          "room": "Media",
+          "points_px": [
+            [
+              648,
+              654
+            ],
+            [
+              802,
+              654
+            ],
+            [
+              802,
+              860
+            ],
+            [
+              648,
+              860
+            ]
+          ],
+          "open_sides": "none; all sides bounded by walls"
+        },
+        {
+          "room": "Scullery",
+          "points_px": [
+            [
+              680,
+              290
+            ],
+            [
+              830,
+              290
+            ],
+            [
+              830,
+              355
+            ],
+            [
+              680,
+              355
+            ]
+          ],
+          "open_sides": "south side to Kitchen has no wall, drawn to the counter edge"
+        },
+        {
+          "room": "Sitting",
+          "points_px": [
+            [
+              512,
+              352
+            ],
+            [
+              660,
+              352
+            ],
+            [
+              660,
+              600
+            ],
+            [
+              512,
+              600
+            ]
+          ],
+          "open_sides": "east side to Dining has no wall, drawn to the joinery edge; south side to void above is open with no wall, drawn to the floor-finish change"
+        },
+        {
+          "room": "Study",
+          "points_px": [
+            [
+              395,
+              718
+            ],
+            [
+              530,
+              718
+            ],
+            [
+              530,
+              860
+            ],
+            [
+              395,
+              860
+            ]
+          ],
+          "open_sides": "north side to Entry has no wall, drawn to the floor-finish change; west side is joinery edge"
+        },
+        {
+          "room": "Wir",
+          "points_px": [
+            [
+              234,
+              572
+            ],
+            [
+              328,
+              572
+            ],
+            [
+              328,
+              650
+            ],
+            [
+              234,
+              650
+            ]
+          ],
+          "open_sides": "none; all sides bounded by walls"
+        },
+        {
+          "room": "PDR",
+          "points_px": [
+            [
+              340,
+              518
+            ],
+            [
+              392,
+              518
+            ],
+            [
+              392,
+              600
+            ],
+            [
+              340,
+              600
+            ]
+          ],
+          "open_sides": "none; all sides bounded by walls"
+        },
+        {
+          "room": "Alfresco",
+          "points_px": [
+            [
+              980,
+              300
+            ],
+            [
+              1135,
+              300
+            ],
+            [
+              1135,
+              580
+            ],
+            [
+              980,
+              580
+            ]
+          ],
+          "open_sides": "east side to Entertainment Area has no wall, drawn to the floor-finish change; north side to Laundry is walled"
+        },
+        {
+          "room": "Patio",
+          "points_px": [
+            [
+              530,
+              800
+            ],
+            [
+              645,
+              800
+            ],
+            [
+              645,
+              955
+            ],
+            [
+              530,
+              955
+            ]
+          ],
+          "open_sides": "south side is open with no wall, drawn to the tenancy line"
+        }
+      ],
+      "not_drawn": [
+        {
+          "room": "Garage",
+          "reason": "No garage is drawn on this plan; the only large structure at the bottom is the existing tennis court outside the building."
+        }
+      ]
+    }
+  },
+  "turra_live3_page_9": {
+    "packet": {
+      "room_names": [
+        "Balcony",
+        "Bedroom 3",
+        "Garage",
+        "Linen",
+        "R O B E",
+        "Storage"
+      ],
+      "transform": {
+        "offset_px": [
+          645.35,
+          515.06
+        ],
+        "factor": 0.6432160804020101
+      },
+      "dwelling": true,
+      "page": 9
+    },
+    "reply": {
+      "rooms": [
+        {
+          "room": "Balcony",
+          "points_px": [
+            [
+              560,
+              745
+            ],
+            [
+              727,
+              745
+            ],
+            [
+              727,
+              925
+            ],
+            [
+              560,
+              925
+            ]
+          ],
+          "open_sides": "Top side (y≈745) has no wall; it is open to the Void/Master Bedroom through the door W17, followed as the floor-finish change to the balcony tiles. Right side (x≈727) and bottom side (y≈925) are the balcony edge, drawn boundary with no wall. Left side (x≈560) is the balcony edge, drawn boundary with no wall."
+        },
+        {
+          "room": "Bedroom 3",
+          "points_px": [
+            [
+              697,
+              268
+            ],
+            [
+              866,
+              268
+            ],
+            [
+              866,
+              470
+            ],
+            [
+              815,
+              470
+            ],
+            [
+              815,
+              425
+            ],
+            [
+              700,
+              425
+            ],
+            [
+              700,
+              470
+            ],
+            [
+              697,
+              470
+            ]
+          ],
+          "open_sides": "Bottom side between x≈700 and x≈815 has no wall; it is the robe joinery line (the robe bay at y≈425 is taken out of the room). Other sides follow the inside face of walls: top (exterior wall), right (ensuite wall), left (bathroom wall), and bottom right (linen wall)."
+        },
+        {
+          "room": "R O B E",
+          "points_px": [
+            [
+              700,
+              425
+            ],
+            [
+              815,
+              425
+            ],
+            [
+              815,
+              470
+            ],
+            [
+              700,
+              470
+            ]
+          ],
+          "open_sides": "Top side (y≈425) is the bedroom floor-finish change, followed as a drawn boundary with no wall; the robe is open to Bedroom 3 through its angled door joinery. Bottom side (y≈470) is the linen wall. Left and right sides follow the inside face of the adjoining bedroom walls."
+        },
+        {
+          "room": "Linen",
+          "points_px": [
+            [
+              680,
+              470
+            ],
+            [
+              815,
+              470
+            ],
+            [
+              815,
+              500
+            ],
+            [
+              680,
+              500
+            ]
+          ],
+          "open_sides": "Bottom side (y≈500) has no wall; it is the angled linen door joinery, followed as the drawn cupboard edge. Top side (y≈470) is the robe/bedroom boundary, drawn with no wall. Left and right sides follow the inside face of adjoining walls."
+        }
+      ],
+      "not_drawn": [
+        {
+          "room": "Garage",
+          "reason": "No garage is shown on this floor plan; no room is labelled Garage and no garage door or car space is drawn within the tenancy."
+        },
+        {
+          "room": "Storage",
+          "reason": "No room labelled Storage appears on this plan, and no storage-type room is recognisable by its contents within the tenancy."
+        }
+      ]
+    }
+  }
+}

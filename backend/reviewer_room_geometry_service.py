@@ -778,8 +778,14 @@ def _rooms(paths):
                          "level_name": row.get("level_name", ""),
                          "source_pages": sorted({item.get("page") for item in row.get("evidence", []) if isinstance(item, dict) and isinstance(item.get("page"), int)}),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "room_use_resolution"})
+    known_identities = {_row_identity(row) for row in rows}
     for row in proposal.get("rooms", []) if isinstance(proposal, dict) else []:
         if isinstance(row, dict) and row.get("room_id") and plausible_room_label(row.get("label")):
+            # The proposal adds current outlines for rooms missing from its own list.
+            # If building or room-use evidence already names that room, its trace
+            # must not add a second citation to the picker row.
+            if row.get("source") == "traced_room" and _row_identity(row) in known_identities:
+                continue
             rows.append({"room_id": row["room_id"], "label": row["label"], "level_name": row.get("level_name") or row.get("level", ""),
                          "source_pages": row.get("source_pages", []) or ([row["page"]] if isinstance(row.get("page"), int) else []),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "room_inference_proposal"})

@@ -96,6 +96,32 @@ def use_named_rooms(root):
             if isinstance(row, dict) and row.get("label") and type(row.get("page")) is int]
 
 
+def traced_rooms(root):
+    """Current outlines, without consulting the room registry that this proposal builds."""
+    from backend import reviewer_room_geometry_service as service
+    paths = service._paths({"review_dir": str(root)})
+    try:
+        artifact = reviewer_room_geometry.validate_artifact(service._read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
+    except ValueError:
+        return []
+    return [row for row in reviewer_room_geometry.active_records(
+        artifact, service._source_pdf_fingerprint(paths), [], page_fingerprints=service._vector_page_fingerprints(paths))
+            if not row.get("stand_in")]
+
+
+def _current_named_rooms(root, traces):
+    traced_ids = {row.get("room_id") for row in traces}
+    # A later outline can replace a former three-part reading with one room.
+    # Keep a numbered room if its own outline still exists; otherwise the
+    # current base outline supersedes that old numbering on the same page.
+    base_traces = {(room_identity(row.get("room_label"), row.get("level_name")), row.get("page"))
+                   for row in traces}
+    return [row for row in use_named_rooms(root)
+            if not (row.get("derived_from_repeated_label")
+                    and room_identity(row["label"], row.get("level_name")) not in traced_ids
+                    and (room_identity(row["derived_from_repeated_label"], row.get("level_name")), row["page"]) in base_traces)]
+
+
 def numbered_bedroom_levels(root):
     """Levels where distinct enclosed bedrooms replaced one unnumbered drawing label."""
     rows = use_named_rooms(root)
@@ -103,11 +129,11 @@ def numbered_bedroom_levels(root):
             if row.get("derived_from_repeated_label") == "Bedroom"}
 
 
-def replaced_repeated_labels(root):
+def replaced_repeated_labels(root, traces=None):
     """(label, level) keys, casefolded, of merged same-name records that separately numbered rooms replace: a level's
     plain "Bedroom" once Bedroom 1, 2 exist, its plain "Ensuite" once Ensuite (1), (2), (3) exist."""
     keys = set()
-    for row in use_named_rooms(root):
+    for row in _current_named_rooms(root, traced_rooms(root) if traces is None else traces):
         if row.get("derived_from_repeated_label"):
             keys |= replaced_label_keys(row["derived_from_repeated_label"], row.get("level_name"))
     return keys
@@ -132,7 +158,8 @@ def proposal_room(row):
 def room_proposal(run, root):
     """Base proposal plus reviewer-added rooms and rooms found in scanned plans."""
     proposal = base_proposal(run)
-    replaced = replaced_repeated_labels(root)
+    traces = traced_rooms(root)
+    replaced = replaced_repeated_labels(root, traces)
     proposal["rooms"] = [row for row in proposal["rooms"] if not is_replaced(row, replaced)]
     existing = {room_identity(row.get("label", ""), row.get("level_name") or "Unassigned level")
                 for row in proposal["rooms"] if isinstance(row, dict)}
@@ -142,7 +169,7 @@ def room_proposal(run, root):
         if row["room_id"] not in existing:
             proposal["rooms"].append(proposal_room(row))
             existing.add(row["room_id"])
-    for row in use_named_rooms(root):
+    for row in _current_named_rooms(root, traces):
         if not room_inference.plausible_room_label(row.get("label")):
             continue
         identity = room_identity(row["label"], row["level_name"])
@@ -159,6 +186,24 @@ def room_proposal(run, root):
                                                              "Room named by its use: the drawings print no name for this space"),
                           "excerpt": repeated.upper() if numbered else row["label"]}]})
         existing.add(identity)
+    # A traced room missing from the list (its saved numbering superseded) is added under its own identity; a trace of
+    # a room already listed, by identity or by its own room_id (a hand-saved "room-shop"), is not added again.
+    listed_ids = {row.get("room_id") for row in proposal["rooms"] if isinstance(row, dict)}
+    for trace in traces:
+        label = trace.get("room_label")
+        level = trace.get("level_name") or "Unassigned level"
+        identity = room_identity(label, level)
+        own_id = trace.get("room_id") or identity
+        if (not room_inference.plausible_room_label(label) or identity in existing
+                or own_id in listed_ids or own_id in existing):
+            continue
+        page = trace.get("page")
+        proposal["rooms"].append({"kind": "room", "room_id": own_id, "label": label,
+                                  "level_name": level, "page": page,
+                                  "source_pages": [page] if type(page) is int else [],
+                                  "source": "traced_room", "evidence": [{"page": page,
+                                  "reference": "Current room outline", "excerpt": label}]})
+        existing.update({identity, own_id})
     tasks = Path(root) / "ai_tasks" / "S1_printed_areas"
     for pointer in tasks.glob("*/current.json"):
         try:

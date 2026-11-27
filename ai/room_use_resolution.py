@@ -344,7 +344,7 @@ def _house_label_matches(label):
         "outdoor": r"\b(balcony|alfresco|deck|terrace|patio|pool|spa|porch|verandah?|courtyard|roof|drive\s?way|fence|(?:back|front|side)?\s?yard|garden(?!\s*(?:room|flat|studio))|lawn|landscap\w*|paving|paved|path(?:way)?|bbq|outdoor)\b",
         "lift_shaft": r"\b(lift(?: shaft)?)\b",
         "circulation": r"\b(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
-        "house_living": r"\b(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
+        "house_living": r"\b(living|lounge|sitting|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
     }
     priority = ("house_wet", "house_service", "garage", "outdoor", "lift_shaft", "house_bedroom", "house_living", "circulation")
     leading = {
@@ -352,7 +352,7 @@ def _house_label_matches(label):
         "house_service": r"^(laundry|l['’]?dry|ldry|w\.?i\.?r\.?|walk.?in robe|robe|linen)\b",
         "garage": r"^(garage|carport)\b", "outdoor": r"^(balcony|alfresco|deck|terrace|patio|pool|spa|porch|verandah?|courtyard|drive\s?way|(?:timber |boundary |side |front |rear )?fence|(?:back|front|side)?\s?yard|garden(?!\s*(?:room|flat|studio))|lawn|landscap\w*|paving|path(?:way)?|bbq|outdoor)\b",
         "lift_shaft": r"^lift\b", "house_bedroom": r"^(mbr|bed(?:room)?s?(?:\s*\d+)?|br\s*\d*)\b",
-        "house_living": r"^(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
+        "house_living": r"^(living|lounge|sitting|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
         "circulation": r"^(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
     }
     for category in priority:

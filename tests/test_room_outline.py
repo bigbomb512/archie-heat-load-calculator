@@ -165,6 +165,12 @@ def naming_and_split_checks():
         {"areas": [{"number": 1, "room": "Bar"}]}, 2, ["Bar"], transform)[0] == {0: "Bar"})
     drawn = ro.validate_outline_reply({"rooms": [{"room": "Dining", "points_px": [[0, 0], [10, 0], [10, 10]]}]}, ["Bar"], transform)
     check("an open-plan outline may name an unlabelled space by its use", drawn[0]["room"] == "Dining")
+    extra = {}
+    kept = ro.validate_outline_reply({"rooms": [{"room": "Bar", "points_px": [[0, 0], [10, 0], [10, 10]]},
+                                                {"room": "Zorblax", "points_px": [[0, 0], [10, 0], [10, 10]]}]},
+                                     ["Bar"], transform, diagnostics=extra)
+    check("an unlisted, unprinted name is recorded for review, not applied, and the listed room is kept",
+          [row["room"] for row in kept] == ["Bar"] and extra["extra_rooms"][0]["room"] == "Zorblax")
     from ai import room_use_resolution
     taxonomy = room_use_resolution.load_taxonomy()
     check("every use name maps to exactly one room-use type",
