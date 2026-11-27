@@ -244,6 +244,30 @@ function needsMarkup(needs) {
     .join("");
 }
 
+// Wall types printed in the drawings' legends (ai/construction_u_values.plan_wall_legend): listed so an engineer can match
+// them to walls and cited U-values. They are notes only; the calculation doesn't use them.
+function wallLegendMarkup(rows) {
+  const byType = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row?.construction) continue;
+    const pages = byType.get(row.construction) || new Set();
+    if (row.page != null && row.page !== "") pages.add(String(row.page));
+    byType.set(row.construction, pages);
+  }
+  if (!byType.size) return "";
+  const items = [...byType.entries()]
+    .map(([name, pages]) => {
+      const list = [...pages].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+      return `<li data-wall-legend-item><b>${escapeHtml(name)}</b>${list.length ? ` <span class="job-muted">(page${list.length === 1 ? "" : "s"} ${escapeHtml(list.join(", "))})</span>` : ""}</li>`;
+    })
+    .join("");
+  return `<div class="job-wall-legend" data-wall-legend>
+      <h3>Wall types printed on the drawings</h3>
+      <p class="job-caption" data-wall-legend-label>For review, not used in the calculation. Each needs matching to its walls and a cited U-value before it can be.</p>
+      <ul>${items}</ul>
+    </div>`;
+}
+
 function calculationStatus(job, status, needs, projectId) {
   if (activeCalculations.has(projectId))
     return "The final room loads are being calculated.";
@@ -288,6 +312,7 @@ export async function renderOperating(projectId) {
     <section class="job-panel job-operating-needs" aria-labelledby="operating-needs-title">
       <h2 id="operating-needs-title">Operating-load questions <span>(${needs.length})</span></h2>
       ${needsMarkup(needs)}
+      ${wallLegendMarkup(workflow.answer_options?.observed_wall_constructions)}
       <h3>Equipment found in the drawings</h3>
       ${coverageMessage ? `<p role="status" data-equipment-coverage>${escapeHtml(coverageMessage)}</p>` : ""}
       ${catalogueWarnings ? `<details><summary>Catalogue entries needing correction</summary><p>${escapeHtml(catalogueWarnings)}</p></details>` : ""}
