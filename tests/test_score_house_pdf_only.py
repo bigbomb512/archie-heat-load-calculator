@@ -59,5 +59,54 @@ class CompareTests(unittest.TestCase):
         self.assertIn("Living", score.markdown("house", result))
 
 
+
+class StandInPdfTests(unittest.TestCase):
+    """A job saved in a removed worktree lost its upload; an identical PDF may stand in, only in the copy."""
+
+    def job(self, folder, pdf_bytes_drawn_on):
+        import hashlib, json
+        digest = hashlib.sha256(pdf_bytes_drawn_on).hexdigest()
+        (folder / "reviewer_room_geometry.json").write_text(json.dumps(
+            {"records": [{"source_fingerprints": {"source_pdf": digest}}]}), encoding="utf-8")
+        (folder / "ai_input.json").write_text(json.dumps({"source_pdf": "/gone/worktree/drawing.pdf"}), encoding="utf-8")
+
+    def test_the_same_pdf_is_used_in_the_copy(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            folder, pdf = Path(temp), Path(temp) / "same.pdf"
+            pdf.write_bytes(b"%PDF drawing")
+            self.job(folder, b"%PDF drawing")
+            project = {"pdf": "/gone/worktree/drawing.pdf"}
+            score.use_stand_in_pdf(folder, project, pdf)
+            self.assertEqual(json.loads((folder / "ai_input.json").read_text())["source_pdf"], str(pdf))
+            self.assertEqual(project["pdf"], str(pdf))
+
+    def test_a_different_pdf_is_refused(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            folder, pdf = Path(temp), Path(temp) / "other.pdf"
+            pdf.write_bytes(b"%PDF another revision")
+            self.job(folder, b"%PDF drawing")
+            with self.assertRaises(SystemExit):
+                score.use_stand_in_pdf(folder, {}, pdf)
+            self.assertEqual(json.loads((folder / "ai_input.json").read_text())["source_pdf"], "/gone/worktree/drawing.pdf")
+
+
+
+class FactsTests(unittest.TestCase):
+    def test_a_room_with_no_load_is_not_cooled_floor(self):
+        # Turramurra's checked job keeps a 986 m² driveway in the model with no load; it isn't 986 m² of cooled floor.
+        built = {"topology": {"floors": [{"floor_id": "f", "name": "Ground Floor"}], "zones": [{"zone_id": "z", "floor_id": "f"}],
+                              "rooms": [{"room_id": "living", "name": "Living", "zone_id": "z", "area_m2": 30},
+                                        {"room_id": "drive", "name": "Driveway", "zone_id": "z", "area_m2": 986}]}}
+        hour = lambda kw: {"components": {"walls": {"total_kw": kw}}}
+        report = {"included_scope_peak": {"final_design_total_kw": 2.0},
+                  "scenario_results": [{"rooms": [{"room_id": "living", "hours": [hour(2.0)]},
+                                                  {"room_id": "drive", "hours": [hour(0.0)]}]}]}
+        rooms = {row["name"]: row for row in score.facts(built, report, {}, [], {})["rooms"]}
+        self.assertTrue(rooms["Living"]["cooled"])
+        self.assertFalse(rooms["Driveway"]["cooled"])
+
+
 if __name__ == "__main__":
     unittest.main()

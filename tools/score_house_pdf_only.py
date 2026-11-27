@@ -10,6 +10,9 @@ the two jobs of the same PDF:
                  "level_pages": {"Lower Ground Floor": 4}}}
 
 "level_pages" says which plan page a checked level belongs to when its rooms were traced on another, aligned sheet.
+"checked_pdf" / "ai_pdf" give a copy of the same drawing PDF for a job whose own upload is gone (a job saved in a
+since-removed worktree). It is used only in the copy, and only when its SHA-256 matches the fingerprint the job's
+outlines were drawn on; otherwise the case stops, because the outlines can't be checked against the drawing.
 
 Each job is copied (saved jobs are never touched), its model rebuilt from the saved answers and its full load
 calculated, so both numbers come from the same code. What is compared:
@@ -38,7 +41,25 @@ FALSE_COMPLETE_FLOOR = 0.80     # or covering under 80 % of the checked cooled f
 
 
 # ------------------------------------------------------------------ recalculation (runs in a child process)
-def recalc(job_dir, copy_root, out_file):
+def use_stand_in_pdf(target, project, pdf):
+    """Point the copied job at an identical copy of its drawing PDF (same SHA-256 as its outlines record)."""
+    import hashlib
+    pdf = Path(pdf)
+    digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    geometry_file = target / "reviewer_room_geometry.json"
+    records = json.loads(geometry_file.read_text(encoding="utf-8")).get("records", []) if geometry_file.exists() else []
+    expected = {(row.get("source_fingerprints") or {}).get("source_pdf") for row in records} - {None, ""}
+    if expected and expected != {digest}:
+        raise SystemExit(f"{pdf.name} is not the PDF this job's outlines were drawn on (SHA-256 {digest[:12]}…).")
+    ai_input_file = target / "ai_input.json"
+    if ai_input_file.exists():
+        ai_input = json.loads(ai_input_file.read_text(encoding="utf-8"))
+        ai_input["source_pdf"] = str(pdf)
+        ai_input_file.write_text(json.dumps(ai_input), encoding="utf-8")
+    project["pdf"] = str(pdf)
+
+
+def recalc(job_dir, copy_root, out_file, pdf=""):
     """Copy one job, rebuild its model from the saved answers and calculate the full load; write the facts to compare."""
     sys.path.insert(0, str(REPO))
     from backend import ai_provider
@@ -54,6 +75,8 @@ def recalc(job_dir, copy_root, out_file):
     shutil.copytree(source, target, ignore=SKIP)
     projects = json.loads((source.parent.parent / "web_projects.json").read_text(encoding="utf-8"))
     project = json.loads(json.dumps(projects[source.name]).replace(json.dumps(str(source))[1:-1], json.dumps(str(target))[1:-1]))
+    if pdf:
+        use_stand_in_pdf(target, project, pdf)
 
     class Web:
         WEB_REVIEW = str(target.parent)
@@ -111,9 +134,11 @@ def facts(built, report, phase1, traces, page_north):
         for row in (room.get("cooling_load") or {}).get("glazing_surfaces", []):
             side = row.get("orientation") or "?"
             glass[side] = glass.get(side, 0.0) + float(row.get("explicit_opening_area_m2") or 0)
+        # A zero-load row (a driveway left in the model) isn't cooled floor.
         rooms.append({"room_id": room["room_id"], "name": room.get("name", ""), "level": level,
                       "area_m2": room.get("area_m2"), "ceiling_mm": room.get("ceiling_height_mm"),
-                      "cooled": room["room_id"] in room_peaks, "peak_kw": round(room_peaks.get(room["room_id"], 0.0), 3),
+                      "cooled": room_peaks.get(room["room_id"], 0.0) > 0,
+                      "peak_kw": round(room_peaks.get(room["room_id"], 0.0), 3),
                       "glass_m2": {k: round(v, 2) for k, v in glass.items()},
                       "outlines": outlines.get((str(room.get("name", "")).casefold(), level.casefold()), [])})
     coverage = (phase1 or {}).get("phase1_coverage") or report.get("phase1_coverage") or {}
@@ -241,7 +266,7 @@ def main():
     parser.add_argument("--cases", default=str(REPO / "output" / "house_cases.json"))
     parser.add_argument("--case", action="append", help="score only these labels")
     parser.add_argument("--out", default=str(REPO / "output" / "evaluations"))
-    parser.add_argument("--recalc", nargs=3, help=argparse.SUPPRESS)
+    parser.add_argument("--recalc", nargs="+", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.recalc:
         return recalc(*args.recalc)
@@ -262,12 +287,23 @@ def main():
                 copy = Path(temp) / f"{label}-{side}"
                 copy.mkdir()
                 started = time.time()
-                run = subprocess.run([sys.executable, __file__, "--recalc", case[side], str(copy), str(result)],
+                run = subprocess.run([sys.executable, __file__, "--recalc", case[side], str(copy), str(result),
+                                      *([case[f"{side}_pdf"]] if case.get(f"{side}_pdf") else [])],
                                      capture_output=True, text=True, cwd=REPO)
                 if run.returncode or not result.exists():
-                    raise SystemExit(f"{label} {side}: recalculation failed\n{run.stderr[-2000:]}")
+                    # A job that can't be calculated is a result too (a PDF-only run that stopped early has no number).
+                    reason = (run.stderr.strip().splitlines() or ["no output"])[-1][:300]
+                    got[side] = {"failed": reason}
+                    print(f"{label} {side}: could not be calculated: {reason}", flush=True)
+                    break
                 got[side] = json.loads(result.read_text(encoding="utf-8"))
                 print(f"{label} {side}: {got[side]['total_kw']} kW ({time.time() - started:.0f} s)", flush=True)
+            failed = {side: row["failed"] for side, row in got.items() if "failed" in row}
+            if failed:
+                results[label] = {"not_scored": failed}
+                sections.append(f"## {label}\n\nNot scored: " + "; ".join(f"{side} job could not be calculated ({why})"
+                                                                         for side, why in failed.items()) + "\n")
+                continue
             score = compare(got["checked"], got["ai"], case.get("level_pages"))
             results[label] = score
             sections.append(markdown(label, score))
