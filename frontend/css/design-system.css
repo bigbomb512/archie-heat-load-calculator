@@ -1,17 +1,17 @@
 /* Shared foundations and controls. Keep page composition in its own stylesheet. */
 :root {
-  --ui-ink: #163b50;
+  --ui-ink: #1f2328;
   --ui-primary: #246b91;
-  --ui-muted: #526873;
-  --ui-canvas: #f7f8f6;
+  --ui-muted: #59636e;
+  --ui-canvas: #f6f8fa;
   --ui-white: #fff;
-  --ui-border: #d5dfe5;
+  --ui-border: #d1d9e0;
   --ui-wash: #e8f1f7;
   --ui-danger: #a33432;
   --ui-warning: #805a17;
   --ui-success: #27654d;
   --ui-radius-control: 6px;
-  --ui-radius-panel: 10px;
+  --ui-radius-panel: 6px;
   --ui-space-1: 4px;
   --ui-space-2: 8px;
   --ui-space-3: 12px;
@@ -26,7 +26,7 @@
   --ui-heading-small: 20px;
   --ui-heading-medium: 24px;
   --ui-heading-large: 32px;
-  --ui-shadow: 0 8px 24px #163b5014;
+  --ui-shadow: 0 8px 24px #1f232814;
 }
 /* Equal control dimensions across the public site and engineering workspace. */
 body:is(.hvac-site,.hvac-app) .btn,
@@ -65,7 +65,7 @@ body.hvac-app .readiness-draft { border-left: 3px solid var(--ui-warning); }
 body.hvac-app .readiness-review_ready { border-left: 3px solid var(--ui-success); }
 body.hvac-app .toast { box-shadow: var(--ui-shadow); border: 1px solid var(--ui-border); }
 .project-retry { display:block; margin-top:var(--ui-space-3); padding:var(--ui-space-2) var(--ui-space-3); min-height:40px; border:1px solid #b0c8d5; border-radius:var(--ui-radius-control); background:transparent; color:#fff; cursor:pointer; }
-.project-retry:hover { background:#294e63; }
+.project-retry:hover { background:#32383f; }
 body.hvac-app .nav .ic { width:16px; height:16px; stroke-width:1.5; }
 body.hvac-app .empty-proj { font-size:var(--ui-text-small); line-height:1.6; }
 /* Let sequential information read as a sequence, without four separate cards. */

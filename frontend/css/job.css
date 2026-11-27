@@ -1,27 +1,18 @@
 @font-face {
-  font-family: "Alte Haas Grotesk";
-  src: url("/frontend/assets/fonts/AlteHaasGroteskRegular.ttf")
-    format("truetype");
-  font-weight: 400;
+  font-family: "Manrope";
+  src: url("/frontend/assets/fonts/Manrope-Variable.ttf") format("truetype");
+  font-weight: 200 800;
   font-style: normal;
   font-display: swap;
 }
-@font-face {
-  font-family: "Alte Haas Grotesk";
-  src: url("/frontend/assets/fonts/AlteHaasGroteskBold.ttf") format("truetype");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-
 body.job-preview {
-  --page: #f2f4f4;
+  --page: #f6f8fa;
   --sheet: #ffffff;
-  --ink: #163b50;
-  --ink-2: #4b616d;
-  --ink-3: #5f727c; /* 5.0:1 on white, 4.6:1 on the page (was #6b7f89, 4.2:1) */
-  --line: #d3dce1;
-  --line-soft: #e3e9ec;
+  --ink: #1f2328;
+  --ink-2: #4f5862;
+  --ink-3: #59636e; /* 5.0:1 on white, 4.6:1 on the page (was #6b7f89, 4.2:1) */
+  --line: #d1d9e0;
+  --line-soft: #e6eaef;
   --action: #246b91;
   --select: #dce9f1;
   --row-select: #eef5f9;
@@ -32,7 +23,7 @@ body.job-preview {
   background: var(--page);
   color: var(--ink);
   font:
-    400 15px/1.45 "Alte Haas Grotesk",
+    400 15px/1.45 "Manrope",
     Helvetica,
     sans-serif;
   font-variant-numeric: tabular-nums;
@@ -339,7 +330,7 @@ body.job-preview {
   min-width: 0;
   background: var(--sheet);
   border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  border-radius: 6px;
   overflow: hidden;
 }
 .job-plan-page figcaption {
@@ -400,7 +391,7 @@ body.job-preview {
   fill: #e8f1f7;
 }
 .job-plan text {
-  font-family: "Alte Haas Grotesk", Helvetica, sans-serif;
+  font-family: "Manrope", Helvetica, sans-serif;
   fill: var(--ink);
   font-size: 38px;
   font-weight: 700;
@@ -463,7 +454,7 @@ body.job-preview {
 .job-plan-marker text {
   fill: #ffffff;
   font-weight: 700;
-  font-family: "Alte Haas Grotesk", Helvetica, sans-serif;
+  font-family: "Manrope", Helvetica, sans-serif;
 }
 .job-plan-chip small {
   color: var(--ink-2);
@@ -531,7 +522,7 @@ body.job-preview {
   background: var(--action);
   color: var(--sheet);
   font:
-    700 15px/1.25 "Alte Haas Grotesk",
+    700 15px/1.25 "Manrope",
     Helvetica,
     sans-serif;
   text-decoration: none;
@@ -752,7 +743,7 @@ body.job-preview {
   background: var(--sheet);
   color: var(--ink);
   font:
-    400 15px "Alte Haas Grotesk",
+    400 15px "Manrope",
     Helvetica,
     sans-serif;
 }
@@ -818,7 +809,7 @@ body.job-preview {
   padding: 2px 0;
   color: var(--action);
   font:
-    400 15px "Alte Haas Grotesk",
+    400 15px "Manrope",
     Helvetica,
     sans-serif;
   text-decoration: underline;
@@ -934,7 +925,7 @@ body.job-preview {
   }
 }
 .job-room-select {
-  font-family: "Alte Haas Grotesk", Helvetica, sans-serif;
+  font-family: "Manrope", Helvetica, sans-serif;
 }
 .job-surface-table table {
   min-width: 0;
@@ -1045,12 +1036,12 @@ body.job-preview {
   cursor: pointer;
   background:
     radial-gradient(120% 70% at 50% -10%, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 60%),
-    linear-gradient(180deg, #2f7fab 0%, #246b91 45%, #163b50 100%);
+    linear-gradient(180deg, #2f7fab 0%, #246b91 45%, #1f2328 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.55),
     inset 0 -2px 0 rgba(0, 0, 0, 0.18),
-    0 24px 48px -24px rgba(22, 59, 80, 0.7),
-    0 2px 6px rgba(22, 59, 80, 0.18);
+    0 24px 48px -24px rgba(31, 35, 40, 0.7),
+    0 2px 6px rgba(31, 35, 40, 0.18);
   transition:
     transform 160ms ease,
     box-shadow 160ms ease,
@@ -1083,8 +1074,8 @@ body.job-preview {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.6),
     inset 0 -2px 0 rgba(0, 0, 0, 0.18),
-    0 30px 56px -24px rgba(22, 59, 80, 0.75),
-    0 2px 6px rgba(22, 59, 80, 0.2);
+    0 30px 56px -24px rgba(31, 35, 40, 0.75),
+    0 2px 6px rgba(31, 35, 40, 0.2);
 }
 .job-drop:active {
   transform: translateY(0);
@@ -1475,7 +1466,7 @@ body.job-preview {
   border-top: 0;
 }
 .job-link-button {
-  font-family: "Alte Haas Grotesk", Helvetica, sans-serif;
+  font-family: "Manrope", Helvetica, sans-serif;
 }
 @media (max-width: 767px) {
   .job-list-inner h1 {
@@ -2205,7 +2196,7 @@ body.job-preview {
    large and the facts in a ruled column. Everything else is quieter than before: detail sections are plain sheets
    without outlines, separated by space, with smaller headings. Type: Alte Haas Grotesk only; scale 13/15/18/24/64. */
 body.job-preview {
-  --rule: #163b50;      /* the title block's line: the ink colour, as drawn */
+  --rule: #1f2328;      /* the title block's line: the ink colour, as drawn */
   --space-section: 28px;
 }
 .job-main {
