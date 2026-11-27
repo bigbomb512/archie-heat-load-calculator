@@ -40,6 +40,9 @@ or new calculation values. Order is priority; a person reorders it.
    U-value question stays [needs engineer]. (From set 17 fixes.)
 4. [x] (on main: `84e129d` bedrooms, `1b2a40a` other names; no PR needed) Rooms that print the same name twice on one level (two "Bedroom" labels) become separate rooms (Bedroom (1),
    Bedroom (2)) when each has its own enclosed outline; run the Turramurra calculation check. (From set 17 fixes.)
+5. [x] (open PR, not merged: [PR #35](https://github.com/bigbomb512/archie-heat-load-calculator/pull/35)) Fix the tests that fail now and then in full runs
+   (`job-preview.spec.mjs:296`, `room-joins.spec.mjs`). Cause: the web server's listen queue of 5 dropped some of a
+   page load's ~20 connections on a busy machine; raised to 128, with a regression test.
 
 Not for autonomous runs: live set 17/19/20 re-runs (paid AI), other brands' unit ranges and capacity tables (need
 manufacturer data from the web), wall-legend U-values, safety-factor, sign-policy and radiant-fraction decisions
@@ -67,6 +70,9 @@ manufacturer data from the web), wall-legend U-values, safety-factor, sign-polic
   stacked on #31; (3) `CLAUDE.md`, `DECISIONS.md` and this Build queue are committed in one docs PR, to merge before the
   next autonomous run. Also: `job-preview.spec.mjs:296` and
   `room-joins.spec.mjs:68` fail now and then in full runs and pass on re-run. They're worth fixing as a queue task.
+- Later the same day: fixed as queue task 5, [PR #35](https://github.com/bigbomb512/archie-heat-load-calculator/pull/35).
+  A failure trace showed two modules never answered; the server's listen queue (Python's default of 5) dropped
+  connections under load. Stressed runs: 15/60 failed before, 0/60 after. The queue has no tasks left.
 
 ## Open implementation and validation work
 
