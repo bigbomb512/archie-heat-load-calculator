@@ -42,6 +42,18 @@ for (const [label, badge] of [
   });
 }
 
+test("a result kept preliminary by self-checks says what to look at", async ({ page }) => {
+  const checks = ["1 room on the room list isn't counted (BED). Give it an area or take it off the list.",
+                  "Only 15 of the 28 windows in the window schedule are on a room's wall, so glass and its sun may be missing."];
+  await open(page, { status: "preliminary", count: 0, open: [], text: "Preliminary (2 self-checks to look at)",
+                     reason: checks.join(" "), self_checks: checks });
+  const why = page.locator("[data-label-why]");
+  await expect(why).toContainText("Preliminary (2 self-checks to look at)");
+  await expect(why.locator("[data-self-checks]")).toContainText("isn't counted (BED)");
+  await expect(why.locator("[data-self-checks]")).toContainText("Only 15 of the 28 windows");
+  await expect(why).not.toContainText("Answer the open questions");
+});
+
 test("no saved cooling result shows no label badge", async ({ page }) => {
   plan.status.results_ready = false;
   plan.final_report = {};
