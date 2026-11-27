@@ -427,9 +427,12 @@ class RunTests(unittest.TestCase):
             supervisor.run(None, self.project)
         self.assertGreaterEqual(apply.call_count, 1)
         self.assertEqual(rebuild.call_count, 2)  # initial snapshot plus one cycle rebuild
-        timing = read_json(self.root / supervisor.JOB_FILE)["cycle_timings"][0]
+        job = read_json(self.root / supervisor.JOB_FILE)
+        timing = job["cycle_timings"][0]
         self.assertEqual(timing["rebuild_seconds"], 0)
-        self.assertIn("ai_seconds", timing)
+        for key in ("ai_seconds", "evidence_seconds", "drawing_answers_seconds", "audit_seconds", "total_seconds"):
+            self.assertIn(key, timing)
+        self.assertIn("initial_rebuild_seconds", job)
 
     def test_failed_question_is_not_reasked_for_same_model_inputs(self):
         value = snapshot(room(area_m2=None))

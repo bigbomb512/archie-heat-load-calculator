@@ -139,6 +139,29 @@ def _registration_tokens(words):
     return tokens
 
 
+def _cluster_sizes(pairs, tolerance=REGISTRATION_TOLERANCE_PT):
+    """For each pair, how many pairs (itself included) have a shift within the tolerance on both axes: the same
+    counts as testing every pair against every other, found through a grid of tolerance-sized cells. A house set's
+    two plan sheets give ~35,000 pairs, so the all-against-all test took ~40 s per registration (2026-11-19).
+    Neighbours are looked for two cells out (a shift within the tolerance is at most one cell away; the second ring
+    covers any rounding in the division) and each candidate gets the exact test the plain loop used."""
+    cells = {}
+    for index, row in enumerate(pairs):
+        cells.setdefault((math.floor(row[0] / tolerance), math.floor(row[1] / tolerance)), []).append(index)
+    sizes = []
+    for dx, dy, *_rest in pairs:
+        cx, cy = math.floor(dx / tolerance), math.floor(dy / tolerance)
+        count = 0
+        for ix in range(cx - 2, cx + 3):
+            for iy in range(cy - 2, cy + 3):
+                for index in cells.get((ix, iy), ()):
+                    other = pairs[index]
+                    if abs(other[0] - dx) <= tolerance and abs(other[1] - dy) <= tolerance:
+                        count += 1
+        sizes.append(count)
+    return sizes
+
+
 def plan_text_registration(source_words, target_words):
     """{"dx_pt", "dy_pt", "votes", "anchors", "runner_up"} moving the source sheet onto the target sheet (PDF points), or
     None. Every pair of equal dimension numbers or grid letters on the two sheets votes for its shift; the winning shift
@@ -153,7 +176,8 @@ def plan_text_registration(source_words, target_words):
     def cluster(dx, dy):
         return [row for row in pairs if abs(row[0] - dx) <= REGISTRATION_TOLERANCE_PT and abs(row[1] - dy) <= REGISTRATION_TOLERANCE_PT]
 
-    ranked = sorted(((len(cluster(row[0], row[1])), row[0], row[1]) for row in pairs), key=lambda row: (-row[0], row[1], row[2]))
+    ranked = sorted(((count, row[0], row[1]) for row, count in zip(pairs, _cluster_sizes(pairs))),
+                    key=lambda row: (-row[0], row[1], row[2]))
     votes, best_dx, best_dy = ranked[0]
     best = cluster(best_dx, best_dy)
     dx, dy = median(row[0] for row in best), median(row[1] for row in best)

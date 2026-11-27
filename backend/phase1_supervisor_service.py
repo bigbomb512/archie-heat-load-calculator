@@ -645,7 +645,10 @@ def run(web, project, step=lambda *args: None):
     cycle = int(saved.get("cycle") or 0)
     failed_inputs = deepcopy(saved.get("failed_inputs", {}))
     cycle_timings = deepcopy(saved.get("cycle_timings", []))
+    started = time.monotonic()
     snapshot = _rebuild(web, project)
+    # The model built before the first cycle, which the job's step timing counts under "audit" (its first step).
+    initial_rebuild_seconds = round(time.monotonic() - started, 3)
     gaps = audit(snapshot)
     initial_ids = {row["id"] for row in gaps}
     check = current_check()
@@ -659,7 +662,8 @@ def run(web, project, step=lambda *args: None):
                      gaps_found=len(initial_ids | set(attempts) | {gap["id"] for gap in gaps}), gaps_fixed=len(resolved),
                      resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root),
                      area_baseline=baseline, area_changes=area_changes(baseline, room_areas(snapshot)),
-                     failed_inputs=failed_inputs, cycle_timings=cycle_timings, **extra)
+                     failed_inputs=failed_inputs, cycle_timings=cycle_timings,
+                     initial_rebuild_seconds=initial_rebuild_seconds, **extra)
         write_json(root / JOB_FILE, state)
         write_json(root / "phase1_supervisor_state.json", {key: state[key] for key in (
             "supervision_id", "attempts", "history", "cycle", "resolved_gap_ids", "exceptions", "model_fingerprint",
@@ -677,7 +681,7 @@ def run(web, project, step=lambda *args: None):
             break
         cycle += 1
         cycle_started = time.monotonic()
-        ai_seconds = rebuild_seconds = audit_seconds = 0.0
+        ai_seconds = rebuild_seconds = audit_seconds = evidence_seconds = drawing_seconds = 0.0
         before = model_fingerprint(snapshot), {row["id"] for row in gaps}
         changed = False
         step("audit", "Checking room areas, boundaries, glass and ceiling heights")
@@ -779,16 +783,20 @@ def run(web, project, step=lambda *args: None):
         # when an accepted answer changed physical inputs; the pre-rebuild fingerprint is authoritative.
         if changed:
             step("rebuild")
+            evidence_started = time.monotonic()
             tasks._export_determinations(root)
             _build_calculation_evidence(web, project)
             tasks._refresh_geometry_tasks(root)
+            evidence_seconds += time.monotonic() - evidence_started
             # The rebuild may expose new drawing questions (including glass and corner refinements).
             # Send them in this cycle, before auditing the model built from their evidence.
             if drawings._waiting(root) and not read_json(root / JOB_FILE).get("provider_limited"):
+                drawing_started = time.monotonic()
                 try:
                     drawings.answer_all(web, project)
                 except ai_provider.UsageLimitReached:
                     progress(provider_limited=True)
+                drawing_seconds += time.monotonic() - drawing_started
             from backend import ai_preliminary_service as model
             paths = model._paths(project)
             stored_inputs = read_json(paths["current_set"])
@@ -802,7 +810,10 @@ def run(web, project, step=lambda *args: None):
             audit_seconds += time.monotonic() - audit_started
         else:
             failed_inputs.update({gap["id"]: current_fp for gap in select_investigations(gaps, attempts)})
+        # Per cycle: the targeted questions (ai), the evidence and drawing-task refresh after their answers, the
+        # drawing questions that refresh unlocked (drawing_answers), the model rebuild and the re-audit.
         cycle_timings.append({"cycle": cycle, "ai_seconds": round(ai_seconds, 3),
+                              "evidence_seconds": round(evidence_seconds, 3), "drawing_answers_seconds": round(drawing_seconds, 3),
                               "rebuild_seconds": round(rebuild_seconds, 3), "audit_seconds": round(audit_seconds, 3),
                               "total_seconds": round(time.monotonic() - cycle_started, 3)})
         after = model_fingerprint(snapshot), {row["id"] for row in gaps}
@@ -816,6 +827,7 @@ def run(web, project, step=lambda *args: None):
     # apply), so the result uses them.
     if not unavailable and not read_json(root / JOB_FILE).get("provider_limited") and drawings._waiting(root):
         step("rebuild")
+        final_started = time.monotonic()
         try:
             drawings.answer_all(web, project)
             snapshot = _rebuild(web, project)
@@ -823,6 +835,7 @@ def run(web, project, step=lambda *args: None):
             gaps = audit(snapshot)
         except ai_provider.UsageLimitReached:
             progress(provider_limited=True)
+        progress(final_pass_seconds=round(time.monotonic() - final_started, 3))
     exceptions = [{**gap, "attempts": attempts.get(gap["id"], 0),
                    "tried": [row for row in history if row.get("gap_id") == gap["id"]],
                    **({"message": gap["message"].rstrip(".") + ". " + unavailable} if unavailable else {})} for gap in gaps]
