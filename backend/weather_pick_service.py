@@ -128,6 +128,15 @@ def effective(root):
     location = design_weather.canonical(saved.get("location")) if saved.get("location") else ""
     if not location:
         return "", ""
+    # The pick runs in a drawing round; an address typed on the Project tab later doesn't re-run it. Keep the location
+    # (the load doesn't move silently) but say it came from the earlier address; the note is part of the result's
+    # inputs, so the result shows as out of date (Build queue task 10, 2026-11-28).
+    picked_from = next((row.get("text", "") for row in saved.get("clues") or []
+                        if isinstance(row, dict) and row.get("kind") == "job address"), "")
+    address_now = " ".join(str(_read(root / "job_setup.json", {}).get("address") or "").split())[:200]
+    if picked_from != address_now:
+        earlier = f"an earlier address ({picked_from})" if picked_from else "the site details before the address was entered"
+        return location, f"picked from {earlier}; the address has changed, so choose the weather location on the Project tab"
     if saved.get("origin") == "named_in_clues":
         return location, "named in the site details; change it on the Project tab"
     site = f" (site read as {saved['site']})" if saved.get("site") else ""
