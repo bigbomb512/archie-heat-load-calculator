@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archie blue style options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&family=Figtree:wght@400;500;600;700&family=DM+Mono:wght@400;500&family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500&display=swap">
+<style>
+/* Layout: a stack of option panels; each panel = label column + a mock Archie job screen in that option's palette and type. */
+:root {
+  --bg: #f4f5f6; --fg: #1b1f24; --muted: #5d6670; --line: #d9dde2; --panel: #ffffff; --chip: #eceff2;
+  --ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15181c; --fg: #e8ebee; --muted: #9aa3ad; --line: #2c3238; --panel: #1c2026; --chip: #262b31; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #15181c; --fg: #e8ebee; --muted: #9aa3ad; --line: #2c3238; --panel: #1c2026; --chip: #262b31; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px }
+header.page h1 { font: 600 26px/1.2 var(--ui); margin: 0 0 6px; text-wrap: balance }
+header.page p { margin: 0; color: var(--muted); max-width: 68ch }
+
+.option { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 20px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; padding: 20px }
+@media (max-width: 820px) { .option { grid-template-columns: minmax(0, 1fr) } }
+.meta h2 { margin: 0 0 4px; font: 600 18px/1.3 var(--ui) }
+.meta .tag { display: inline-block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px }
+.meta p { margin: 0 0 12px; color: var(--muted) }
+.meta dl { margin: 0 0 12px; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px }
+.meta dt { color: var(--muted) } .meta dd { margin: 0 }
+.swatches { display: flex; gap: 6px; flex-wrap: wrap }
+.swatches span { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line) }
+
+/* ---------- The mock job screen, driven by per-option tokens ---------- */
+.mock { --m-bg:#fff; --m-sheet:#fff; --m-ink:#111; --m-ink2:#555; --m-line:#ddd; --m-accent:#246b91; --m-accent-ink:#fff;
+  --m-wash:#eef; --m-warn-bg:#fbefd3; --m-warn:#5c3d00; --m-ok:#27654d; --m-body:system-ui; --m-head:system-ui; --m-data:ui-monospace; --m-r:8px;
+  background: var(--m-bg); color: var(--m-ink); font-family: var(--m-body); border-radius: 10px; border: 1px solid var(--m-line);
+  overflow: hidden; min-width: 0 }
+.mock .bar { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--m-line); background: var(--m-sheet); flex-wrap: wrap }
+.mock .brand { font: 600 15px/1 var(--m-head); letter-spacing: -.01em }
+.mock .job { color: var(--m-ink2); font-size: 13px; min-width: 0 }
+.mock .steps { display: flex; gap: 4px; padding: 10px 16px 0; flex-wrap: wrap; background: var(--m-sheet); border-bottom: 1px solid var(--m-line) }
+.mock .steps button { font: 500 13px/1 var(--m-body); color: var(--m-ink2); background: none; border: 0; padding: 9px 10px 11px;
+  border-bottom: 2px solid transparent; cursor: pointer }
+.mock .steps button[aria-current="step"] { color: var(--m-ink); border-bottom-color: var(--m-accent) }
+.mock .steps b { font-family: var(--m-data); font-weight: 500; color: var(--m-ink2); margin-right: 6px }
+.mock .body { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 14px; padding: 16px }
+@media (max-width: 640px) { .mock .body { grid-template-columns: minmax(0, 1fr) } }
+.mock .card { background: var(--m-sheet); border: 1px solid var(--m-line); border-radius: var(--m-r); padding: 14px; min-width: 0 }
+.mock .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--m-ink2) }
+.mock .big { font: 600 34px/1.1 var(--m-head); margin: 4px 0 2px; font-variant-numeric: tabular-nums; letter-spacing: -.02em }
+.mock .big small { font-size: 16px; font-weight: 500; color: var(--m-ink2); margin-left: 4px }
+.mock .facts { display: flex; gap: 14px; flex-wrap: wrap; color: var(--m-ink2); font-size: 13px; margin-bottom: 12px }
+.mock .facts span b { color: var(--m-ink); font-weight: 600; font-family: var(--m-data); font-variant-numeric: tabular-nums }
+.mock .actions { display: flex; gap: 8px; flex-wrap: wrap }
+.mock .btn { font: 600 13px/1 var(--m-body); border-radius: calc(var(--m-r) - 2px); padding: 11px 14px; min-height: 40px; cursor: pointer;
+  border: 1px solid var(--m-accent); background: var(--m-accent); color: var(--m-accent-ink) }
+.mock .btn.secondary { background: transparent; color: var(--m-accent) }
+.mock .todo { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px }
+.mock .todo li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px;
+  padding: 8px 10px; border-radius: calc(var(--m-r) - 2px); background: var(--m-wash) }
+.mock .todo li.warn { background: var(--m-warn-bg); color: var(--m-warn) }
+.mock .todo .kw { font-family: var(--m-data); font-variant-numeric: tabular-nums; font-size: 12px }
+.mock .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--m-accent) }
+.mock .warn .dot { background: var(--m-warn) }
+.mock table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px }
+.mock th { text-align: left; font-weight: 500; color: var(--m-ink2); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 6px 6px; border-bottom: 1px solid var(--m-line) }
+.mock td { padding: 7px 6px; border-bottom: 1px solid var(--m-line) }
+.mock td.n { font-family: var(--m-data); font-variant-numeric: tabular-nums; text-align: right }
+.mock th.n { text-align: right }
+.mock .pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--m-wash); color: var(--m-ink2); white-space: nowrap }
+.mock .pill.ok { color: var(--m-ok) }
+.tablewrap { overflow-x: auto }
+
+/* ---------- Options ---------- */
+.o-current { --m-bg:#f2f4f4; --m-sheet:#fff; --m-ink:#163b50; --m-ink2:#4b616d; --m-line:#d3dce1; --m-accent:#246b91; --m-accent-ink:#fff;
+  --m-wash:#eef5f9; --m-warn-bg:#fbefd3; --m-warn:#5c3d00; --m-ok:#27654d;
+  --m-body:"Helvetica Neue", Helvetica, Arial, sans-serif; --m-head:"Helvetica Neue", Helvetica, Arial, sans-serif; --m-data:ui-monospace, Menlo, monospace; --m-r:6px }
+.o-keep { --m-bg:#f4f6f8; --m-sheet:#fff; --m-ink:#22272b; --m-ink2:#5c6670; --m-line:#dce2e7; --m-accent:#246b91; --m-accent-ink:#fff;
+  --m-wash:#eaf3f8; --m-warn-bg:#fdf1dc; --m-warn:#7a4a00; --m-ok:#1f6b47;
+  --m-body:"Source Sans 3", system-ui, sans-serif; --m-head:"Source Sans 3", system-ui, sans-serif; --m-data:"Source Code Pro", ui-monospace, monospace; --m-r:6px }
+.o-keep .big, .o-keep .brand { font-weight: 700 }
+.o-clear { --m-bg:#f5f7fa; --m-sheet:#fff; --m-ink:#1f2933; --m-ink2:#5b6773; --m-line:#dde3ea; --m-accent:#2a73b8; --m-accent-ink:#fff;
+  --m-wash:#e8f1fb; --m-warn-bg:#fff2dc; --m-warn:#7a4a00; --m-ok:#16794c;
+  --m-body:"Inter", system-ui, sans-serif; --m-head:"Inter", system-ui, sans-serif; --m-data:"JetBrains Mono", ui-monospace, monospace; --m-r:8px }
+.o-sky { --m-bg:#f3f8fc; --m-sheet:#fff; --m-ink:#243442; --m-ink2:#5a6b7a; --m-line:#d8e4ee; --m-accent:#1e88d8; --m-accent-ink:#fff;
+  --m-wash:#e3f1fc; --m-warn-bg:#fdf0e1; --m-warn:#8a4b0f; --m-ok:#1f6b47;
+  --m-body:"IBM Plex Sans", system-ui, sans-serif; --m-head:"IBM Plex Sans", system-ui, sans-serif; --m-data:"IBM Plex Mono", ui-monospace, monospace; --m-r:6px }
+.o-steel { --m-bg:#f3f6f8; --m-sheet:#fff; --m-ink:#2e4757; --m-ink2:#617784; --m-line:#d6e0e6; --m-accent:#3a7fb5; --m-accent-ink:#fff;
+  --m-wash:#e7f0f7; --m-warn-bg:#fdeee6; --m-warn:#9a3d1c; --m-ok:#1f7350;
+  --m-body:"Figtree", system-ui, sans-serif; --m-head:"Figtree", system-ui, sans-serif; --m-data:"DM Mono", ui-monospace, monospace; --m-r:10px }
+.o-steel .big, .o-steel .brand { font-weight: 700 }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="page">
+    <h1>Archie blue style options</h1>
+    <p>The same job screen (Turramurra, step 3) in the current style and four blue alternatives without the dark navy. Each changes only colours, fonts and corner rounding; the layout is unchanged. Pick one, or mix them, e.g. "option A colours with option C font". Fonts load from Google Fonts, so open this with an internet connection.</p>
+  </header>
+  <div id="options"></div>
+</div>
+
+<template id="mock">
+  <div class="mock">
+    <div class="bar"><span class="brand">Archie</span><span class="job">139a Burns Road, Turramurra · CC set C8</span></div>
+    <nav class="steps" aria-label="Job steps">
+      <button type="button"><b>1</b>Read the drawings</button>
+      <button type="button"><b>2</b>Check the house</button>
+      <button type="button" aria-current="step"><b>3</b>Load and report</button>
+      <button type="button"><b>4</b>Design the system</button>
+    </nav>
+    <div class="body">
+      <section class="card">
+        <div class="label">Building cooling load</div>
+        <div class="big">14.48<small>kW</small></div>
+        <div class="facts"><span>Peak <b>17:00</b></span><span>Cooled <b>296.0 m²</b></span><span><b>49</b> W/m²</span></div>
+        <div class="actions"><button type="button" class="btn">Create the report</button><button type="button" class="btn secondary">Confirm room list</button></div>
+        <ul class="todo">
+          <li class="warn"><span class="dot"></span><span>Confirm the room list before recalculating</span><span class="kw">gate</span></li>
+          <li><span class="dot"></span><span>W18 Sitting has no outside wall</span><span class="kw">±0.4 kW</span></li>
+          <li><span class="dot"></span><span>Check glass type for 17 windows</span><span class="kw">±1.2 kW</span></li>
+        </ul>
+      </section>
+      <section class="card">
+        <div class="label">Rooms · ground floor</div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Room</th><th class="n">Area m²</th><th class="n">Peak kW</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Dining</td><td class="n">43.45</td><td class="n">2.31</td><td><span class="pill">needs review</span></td></tr>
+            <tr><td>Sitting</td><td class="n">26.61</td><td class="n">1.38</td><td><span class="pill ok">traced</span></td></tr>
+            <tr><td>Media</td><td class="n">24.29</td><td class="n">1.52</td><td><span class="pill ok">traced</span></td></tr>
+            <tr><td>Living</td><td class="n">23.78</td><td class="n">1.64</td><td><span class="pill ok">traced</span></td></tr>
+            <tr><td>Kitchen</td><td class="n">20.18</td><td class="n">1.05</td><td><span class="pill">needs review</span></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+    </div>
+  </div>
+</template>
+
+<script>
+const options = [
+  { cls: "o-current", tag: "Today", name: "Current", desc: "Dark navy text and headings (#163b50) with the steel-blue buttons. Shown with Helvetica, which looks close to Alte Haas Grotesk.",
+    body: "Alte Haas Grotesk", data: "System mono", swatches: ["#163b50", "#246b91", "#f2f4f4", "#eef5f9", "#fbefd3"] },
+  { cls: "o-keep", tag: "Option A", name: "Same blue, no navy", desc: "Keeps today's blue exactly for buttons, links and the active step. Text becomes a neutral charcoal instead of navy, so the blue stands out on its own.",
+    body: "Source Sans 3", data: "Source Code Pro", swatches: ["#22272b", "#246b91", "#f4f6f8", "#eaf3f8", "#fdf1dc"] },
+  { cls: "o-clear", tag: "Option B", name: "Clear blue", desc: "A slightly brighter, cleaner blue with charcoal text and a cool white page. The most familiar modern app look.",
+    body: "Inter", data: "JetBrains Mono", swatches: ["#1f2933", "#2a73b8", "#f5f7fa", "#e8f1fb", "#fff2dc"] },
+  { cls: "o-sky", tag: "Option C", name: "Sky blue", desc: "The brightest of the four: a lively sky blue on a faintly blue page, with slate text. Feels light and airy, suits a cooling tool.",
+    body: "IBM Plex Sans", data: "IBM Plex Mono", swatches: ["#243442", "#1e88d8", "#f3f8fc", "#e3f1fc", "#fdf0e1"] },
+  { cls: "o-steel", tag: "Option D", name: "Soft steel", desc: "Stays close to today's mood but lighter: a softer blue-grey for text instead of deep navy, a mid blue accent, rounder corners and a warmer font.",
+    body: "Figtree", data: "DM Mono", swatches: ["#2e4757", "#3a7fb5", "#f3f6f8", "#e7f0f7", "#fdeee6"] },
+];
+const host = document.getElementById("options"), tpl = document.getElementById("mock");
+for (const o of options) {
+  const el = document.createElement("article"); el.className = "option";
+  el.innerHTML = `<div class="meta"><span class="tag">${o.tag}</span><h2>${o.name}</h2><p>${o.desc}</p>
+    <dl><dt>Text</dt><dd>${o.body}</dd><dt>Numbers</dt><dd>${o.data}</dd></dl>
+    <div class="swatches">${o.swatches.map(c => `<span style="background:${c}" title="${c}"></span>`).join("")}</div></div>`;
+  const mock = tpl.content.firstElementChild.cloneNode(true); mock.classList.add(o.cls); el.appendChild(mock); host.appendChild(el);
+}
+</script>
+
+</body>
+</html>

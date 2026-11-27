@@ -1,0 +1,6613 @@
+{
+  "jobs": [
+    {
+      "job": "2026.06.26-architectural-drawings-1793599162",
+      "summary": {
+        "trace_parts": 25,
+        "located_labels": 33,
+        "labels_outside": 17,
+        "multi_name_traces": 2,
+        "mismatches": 4,
+        "implausible_areas": 3,
+        "overlaps": 0,
+        "outside_extent": 5,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 28,
+        "placed_windows": 7
+      },
+      "pages": [
+        {
+          "page": 5,
+          "level": "Basement",
+          "overlay": "2026.06.26-architectural-drawings-1793599162/page_005_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "GA R A G E",
+              "x": 3025.9386561742326,
+              "y": 1685.6077100333773
+            },
+            {
+              "name": "CELLAR",
+              "x": 3885.1102796211317,
+              "y": 1781.4577320077447
+            },
+            {
+              "name": "MUD",
+              "x": 3476.474995176053,
+              "y": 1818.737602299588
+            },
+            {
+              "name": "LIFT",
+              "x": 3297.9205013549,
+              "y": 1859.1928874318498
+            },
+            {
+              "name": "BAR",
+              "x": 3882.185206003507,
+              "y": 2032.9780909620024
+            },
+            {
+              "name": "GYM",
+              "x": 3027.0011829156774,
+              "y": 2111.050790483317
+            },
+            {
+              "name": "SAUNA",
+              "x": 3580.0401016804117,
+              "y": 2391.2248928007225
+            },
+            {
+              "name": "ENTERTAINMENT",
+              "x": 3069.039740933077,
+              "y": 2458.858728574992
+            },
+            {
+              "name": "BATH",
+              "x": 3577.5525390739704,
+              "y": 2519.466646474005
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "CELLAR",
+              "x": 3885.1102796211317,
+              "y": 1781.4577320077447
+            },
+            {
+              "name": "LIFT",
+              "x": 3297.9205013549,
+              "y": 1859.1928874318498
+            },
+            {
+              "name": "BATH",
+              "x": 3577.5525390739704,
+              "y": 2519.466646474005
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_470bacf0fb774e985b",
+              "room": "Store",
+              "area_m2": 16.23,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_585e23f26ebee78fa2",
+              "room": "Mud",
+              "area_m2": 15.89,
+              "printed_names": [
+                "MUD"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_98ad7a6e795c214767",
+              "room": "Garage",
+              "area_m2": 12.28,
+              "printed_names": [
+                "GA R A G E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_fa64a45c5e1ae92a94",
+              "room": "Gym",
+              "area_m2": 7.74,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_0600cf7ba733ea1607",
+              "room": "Lift",
+              "area_m2": 7.37,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ad6a79fb0a38231be7",
+              "room": "Bath",
+              "area_m2": 1.74,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_b083da4a895e5ac7ba",
+              "room": "Toilet",
+              "area_m2": 1.72,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c9787c892e706d1681",
+              "room": "Cellar",
+              "area_m2": 26.98,
+              "printed_names": [
+                "BAR"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_e4c618408eb1f13499",
+              "room": "Entertainment",
+              "area_m2": 47.22,
+              "printed_names": [
+                "ENTERTAINMENT"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c054b98e60826ea5a6",
+              "room": "Corridor",
+              "area_m2": 22.43,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_fa175a2c9c7ed27301",
+              "room": "Sauna",
+              "area_m2": 2.29,
+              "printed_names": [
+                "SAUNA"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_4a79f567df6213ccba",
+              "room": "Study",
+              "area_m2": 32.67,
+              "printed_names": [
+                "GYM"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 6,
+          "level": "Ground Floor",
+          "overlay": "2026.06.26-architectural-drawings-1793599162/page_006_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "P OO L",
+              "x": 2067.889544199938,
+              "y": 1059.7134423737068
+            },
+            {
+              "name": "POOL",
+              "x": 3895.3355369682126,
+              "y": 1533.6628597560252
+            },
+            {
+              "name": "L I V I N G",
+              "x": 2996.0254033239094,
+              "y": 1674.1687156279324
+            },
+            {
+              "name": "KITCHEN",
+              "x": 3903.510742720035,
+              "y": 1758.7922709617646
+            },
+            {
+              "name": "BAR",
+              "x": 3644.3292196951265,
+              "y": 1893.1098183848246
+            },
+            {
+              "name": "ST",
+              "x": 3297.9205013549,
+              "y": 1931.4898324009075
+            },
+            {
+              "name": "ENTRY",
+              "x": 2950.061746520466,
+              "y": 2015.1132570763402
+            },
+            {
+              "name": "ST",
+              "x": 2949.961744003624,
+              "y": 2100.874461034102
+            },
+            {
+              "name": "DINING",
+              "x": 3903.49824240543,
+              "y": 2207.6634120847143
+            },
+            {
+              "name": "WIR",
+              "x": 3135.9414247002865,
+              "y": 2284.52345318272
+            },
+            {
+              "name": "ST",
+              "x": 3313.9959059372304,
+              "y": 2284.52345318272
+            },
+            {
+              "name": "FAMILY",
+              "x": 3903.78574964135,
+              "y": 2412.140125194503
+            },
+            {
+              "name": "ENS",
+              "x": 3135.9414247002856,
+              "y": 2488.825143427289
+            },
+            {
+              "name": "BATH",
+              "x": 3314.2709128585457,
+              "y": 2488.825143427289
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "P OO L",
+              "x": 2067.889544199938,
+              "y": 1059.7134423737068
+            },
+            {
+              "name": "ST",
+              "x": 3297.9205013549,
+              "y": 1931.4898324009075
+            },
+            {
+              "name": "WIR",
+              "x": 3135.9414247002865,
+              "y": 2284.52345318272
+            },
+            {
+              "name": "FAMILY",
+              "x": 3903.78574964135,
+              "y": 2412.140125194503
+            },
+            {
+              "name": "ENS",
+              "x": 3135.9414247002856,
+              "y": 2488.825143427289
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_d3960a7792c30ebbb7",
+              "room": "WC",
+              "area_m2": 5.88,
+              "printed_names": [
+                "ST"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d03dd020f41601070d",
+              "room": "L'DRY",
+              "area_m2": 5.85,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_65ed1aff36734159d2",
+              "room": "WIP",
+              "area_m2": 4.59,
+              "printed_names": [
+                "BATH"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_03de07bef472bb038b",
+              "room": "Bar",
+              "area_m2": 2.87,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_8c9d1766ea6f1b302a",
+              "room": "ST",
+              "area_m2": 1.69,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_8d35e59ffd0e8f7ff4",
+              "room": "Entry",
+              "area_m2": 11.07,
+              "printed_names": [
+                "ENTRY",
+                "ST"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "multi_name"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_d351b1122840da86a3",
+              "room": "Dining",
+              "area_m2": 26.52,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b79bff1ddd4c403d02",
+              "room": "Family",
+              "area_m2": 11.74,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_67d9c7a6a20551e591",
+              "room": "Kitchen",
+              "area_m2": 33.09,
+              "printed_names": [
+                "KITCHEN",
+                "BAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "multi_name"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_d26866d24982ffbbba",
+              "room": "Pool",
+              "area_m2": 25.33,
+              "printed_names": [
+                "POOL"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_0504579656eb727020",
+              "room": "Living",
+              "area_m2": 41.07,
+              "printed_names": [
+                "L I V I N G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 7,
+          "level": "First Floor",
+          "overlay": "2026.06.26-architectural-drawings-1793599162/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 1557.2534416610245
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 1700.5846666429106
+            },
+            {
+              "name": "BAR",
+              "x": 3235.8189383961007,
+              "y": 1978.6959994773665
+            },
+            {
+              "name": "ENS",
+              "x": 3062.0395647541463,
+              "y": 2022.326699450047
+            },
+            {
+              "name": "W IR",
+              "x": 3062.4395748215143,
+              "y": 2170.783594056231
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "STUDY",
+              "x": 3515.388474542144,
+              "y": 2444.5943650595686
+            },
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 2474.860819109385
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 1557.2534416610245
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 1700.5846666429106
+            },
+            {
+              "name": "ENS",
+              "x": 3062.0395647541463,
+              "y": 2022.326699450047
+            },
+            {
+              "name": "W IR",
+              "x": 3062.4395748215143,
+              "y": 2170.783594056231
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "STUDY",
+              "x": 3515.388474542144,
+              "y": 2444.5943650595686
+            },
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 2474.860819109385
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_f7c4a770fd80a5e022",
+              "room": "Bar",
+              "area_m2": 2.7,
+              "printed_names": [
+                "BAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_9b46653e049aae6817",
+              "room": "Family",
+              "area_m2": 25.18,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "2026.06.26-architectural-drawings-1795082136",
+      "summary": {
+        "trace_parts": 17,
+        "located_labels": 23,
+        "labels_outside": 14,
+        "multi_name_traces": 0,
+        "mismatches": 4,
+        "implausible_areas": 0,
+        "overlaps": 0,
+        "outside_extent": 5,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 28,
+        "placed_windows": 12
+      },
+      "pages": [
+        {
+          "page": 5,
+          "level": "Basement",
+          "overlay": "2026.06.26-architectural-drawings-1795082136/page_005_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "GA R A G E",
+              "x": 3025.9386561742326,
+              "y": 1685.6077100333773
+            },
+            {
+              "name": "CELLAR",
+              "x": 3885.1102796211317,
+              "y": 1781.4577320077447
+            },
+            {
+              "name": "BAR",
+              "x": 3882.185206003507,
+              "y": 2032.9780909620024
+            },
+            {
+              "name": "BATH",
+              "x": 3577.5525390739704,
+              "y": 2519.466646474005
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "GA R A G E",
+              "x": 3025.9386561742326,
+              "y": 1685.6077100333773
+            },
+            {
+              "name": "CELLAR",
+              "x": 3885.1102796211317,
+              "y": 1781.4577320077447
+            },
+            {
+              "name": "BAR",
+              "x": 3882.185206003507,
+              "y": 2032.9780909620024
+            },
+            {
+              "name": "BATH",
+              "x": 3577.5525390739704,
+              "y": 2519.466646474005
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_4387670d5d2c5ab585",
+              "room": "Corridor",
+              "area_m2": 20.54,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 6,
+          "level": "Ground",
+          "overlay": "2026.06.26-architectural-drawings-1795082136/page_006_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "L I V I N G",
+              "x": 2996.0254033239094,
+              "y": 1674.1687156279324
+            },
+            {
+              "name": "KITCHEN",
+              "x": 3903.510742720035,
+              "y": 1758.7922709617646
+            },
+            {
+              "name": "BAR",
+              "x": 3644.3292196951265,
+              "y": 1893.1098183848246
+            },
+            {
+              "name": "ENTRY",
+              "x": 2950.061746520466,
+              "y": 2015.1132570763402
+            },
+            {
+              "name": "DINING",
+              "x": 3903.49824240543,
+              "y": 2207.6634120847143
+            },
+            {
+              "name": "WIR",
+              "x": 3135.9414247002865,
+              "y": 2284.52345318272
+            },
+            {
+              "name": "FAMILY",
+              "x": 3903.78574964135,
+              "y": 2412.140125194503
+            },
+            {
+              "name": "ENS",
+              "x": 3135.9414247002856,
+              "y": 2488.825143427289
+            },
+            {
+              "name": "BATH",
+              "x": 3314.2709128585457,
+              "y": 2488.825143427289
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "BAR",
+              "x": 3644.3292196951265,
+              "y": 1893.1098183848246
+            },
+            {
+              "name": "FAMILY",
+              "x": 3903.78574964135,
+              "y": 2412.140125194503
+            },
+            {
+              "name": "ENS",
+              "x": 3135.9414247002856,
+              "y": 2488.825143427289
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_98ee778bc737273d7c",
+              "room": "Laundry",
+              "area_m2": 4.59,
+              "printed_names": [
+                "BATH"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_36aa07ce0720813805",
+              "room": "Store",
+              "area_m2": 4.44,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_667b6ad9cbb03947e8",
+              "room": "Bedroom",
+              "area_m2": 14.39,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_030d17253b49babb73",
+              "room": "Living",
+              "area_m2": 50.21,
+              "printed_names": [
+                "L I V I N G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_11f3729c8a2199776b",
+              "room": "Kitchen",
+              "area_m2": 22.74,
+              "printed_names": [
+                "KITCHEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_9aa5f3b79a4a1e0f48",
+              "room": "Dining",
+              "area_m2": 40.43,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_254d9037e5fe7b5f84",
+              "room": "Entry",
+              "area_m2": 6.19,
+              "printed_names": [
+                "ENTRY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_7223a1747dc3f9fcb5",
+              "room": "Wir",
+              "area_m2": 4.54,
+              "printed_names": [
+                "WIR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_951ffe37416bc4721f",
+              "room": "Family",
+              "area_m2": 11.74,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 7,
+          "level": "First",
+          "overlay": "2026.06.26-architectural-drawings-1795082136/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 1557.2534416610245
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 1700.5846666429106
+            },
+            {
+              "name": "BAR",
+              "x": 3235.8189383961007,
+              "y": 1978.6959994773665
+            },
+            {
+              "name": "ENS",
+              "x": 3062.0395647541463,
+              "y": 2022.326699450047
+            },
+            {
+              "name": "W IR",
+              "x": 3062.4395748215143,
+              "y": 2170.783594056231
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "STUDY",
+              "x": 3515.388474542144,
+              "y": 2444.5943650595686
+            },
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 2474.860819109385
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 1700.5846666429106
+            },
+            {
+              "name": "BAR",
+              "x": 3235.8189383961007,
+              "y": 1978.6959994773665
+            },
+            {
+              "name": "W IR",
+              "x": 3062.4395748215143,
+              "y": 2170.783594056231
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "STUDY",
+              "x": 3515.388474542144,
+              "y": 2444.5943650595686
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_d739e18919cbd808ee",
+              "room": "Bedroom 1",
+              "area_m2": 14.73,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_19b34b09eefb22bacd",
+              "room": "ENSUITE (1)",
+              "area_m2": 3.86,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_915357b65580e5783e",
+              "room": "Bedroom 2",
+              "area_m2": 23.19,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_2d939aa9feb49a37a0",
+              "room": "ENSUITE (2)",
+              "area_m2": 7.43,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_8d08fd974b9994fa4f",
+              "room": "ENSUITE (3)",
+              "area_m2": 3.93,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_4d5a2c34c3142e75d6",
+              "room": "ENSUITE",
+              "area_m2": 3.71,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_389ddf67a43737a8a1",
+              "room": "Living",
+              "area_m2": 65.26,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "2026.06.26-architectural-drawings-1795159765",
+      "summary": {
+        "trace_parts": 31,
+        "located_labels": 32,
+        "labels_outside": 13,
+        "multi_name_traces": 2,
+        "mismatches": 4,
+        "implausible_areas": 0,
+        "overlaps": 2,
+        "outside_extent": 6,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 28,
+        "placed_windows": 11
+      },
+      "pages": [
+        {
+          "page": 5,
+          "level": "Basement",
+          "overlay": "2026.06.26-architectural-drawings-1795159765/page_005_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "GA R A G E",
+              "x": 3025.9386561742326,
+              "y": 1685.6077100333773
+            },
+            {
+              "name": "CELLAR",
+              "x": 3885.1102796211317,
+              "y": 1781.4577320077447
+            },
+            {
+              "name": "MUD",
+              "x": 3476.474995176053,
+              "y": 1818.737602299588
+            },
+            {
+              "name": "LIFT",
+              "x": 3297.9205013549,
+              "y": 1859.1928874318498
+            },
+            {
+              "name": "BAR",
+              "x": 3882.185206003507,
+              "y": 2032.9780909620024
+            },
+            {
+              "name": "GYM",
+              "x": 3027.0011829156774,
+              "y": 2111.050790483317
+            },
+            {
+              "name": "SAUNA",
+              "x": 3580.0401016804117,
+              "y": 2391.2248928007225
+            },
+            {
+              "name": "ENTERTAINMENT",
+              "x": 3069.039740933077,
+              "y": 2458.858728574992
+            },
+            {
+              "name": "BATH",
+              "x": 3577.5525390739704,
+              "y": 2519.466646474005
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "LIFT",
+              "x": 3297.9205013549,
+              "y": 1859.1928874318498
+            },
+            {
+              "name": "BATH",
+              "x": 3577.5525390739704,
+              "y": 2519.466646474005
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_8a2804d592faa1dd01",
+              "room": "Cellar",
+              "area_m2": 45.63,
+              "printed_names": [
+                "CELLAR",
+                "BAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "multi_name",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_4a95cbfa4067d8da66",
+              "room": "Entertainment",
+              "area_m2": 41.47,
+              "printed_names": [
+                "ENTERTAINMENT"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_dbf2e15473869dd12a",
+              "room": "Garage",
+              "area_m2": 22.38,
+              "printed_names": [
+                "GA R A G E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_2bc09ad9500b294e44",
+              "room": "Gym",
+              "area_m2": 28.01,
+              "printed_names": [
+                "GYM"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_6149897644eafc7d7e",
+              "room": "Living",
+              "area_m2": 39.2,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_d13b33ae5d2209ade6",
+              "room": "Mud",
+              "area_m2": 16.44,
+              "printed_names": [
+                "MUD"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_f59390e53fd00b0f7e",
+              "room": "Sauna",
+              "area_m2": 2.29,
+              "printed_names": [
+                "SAUNA"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_e0cf0074271eaab6ae",
+              "room": "Corridor",
+              "area_m2": 39.07,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 6,
+          "level": "Ground",
+          "overlay": "2026.06.26-architectural-drawings-1795159765/page_006_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "P OO L",
+              "x": 2067.889544199938,
+              "y": 1059.7134423737068
+            },
+            {
+              "name": "POOL",
+              "x": 3895.3355369682126,
+              "y": 1533.6628597560252
+            },
+            {
+              "name": "L I V I N G",
+              "x": 2996.0254033239094,
+              "y": 1674.1687156279324
+            },
+            {
+              "name": "KITCHEN",
+              "x": 3903.510742720035,
+              "y": 1758.7922709617646
+            },
+            {
+              "name": "LIFT",
+              "x": 3297.9205013549,
+              "y": 1859.1928874318498
+            },
+            {
+              "name": "BAR",
+              "x": 3644.3292196951265,
+              "y": 1893.1098183848246
+            },
+            {
+              "name": "ENTRY",
+              "x": 2950.061746520466,
+              "y": 2015.1132570763402
+            },
+            {
+              "name": "DINING",
+              "x": 3903.49824240543,
+              "y": 2207.6634120847143
+            },
+            {
+              "name": "WIR",
+              "x": 3135.9414247002865,
+              "y": 2284.52345318272
+            },
+            {
+              "name": "FAMILY",
+              "x": 3903.78574964135,
+              "y": 2412.140125194503
+            },
+            {
+              "name": "ENS",
+              "x": 3135.9414247002856,
+              "y": 2488.825143427289
+            },
+            {
+              "name": "BATH",
+              "x": 3314.2709128585457,
+              "y": 2488.825143427289
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "G A R A GE",
+              "x": 1151.3664773442283,
+              "y": 722.5693974272174
+            },
+            {
+              "name": "P OO L",
+              "x": 2067.889544199938,
+              "y": 1059.7134423737068
+            },
+            {
+              "name": "LIFT",
+              "x": 3297.9205013549,
+              "y": 1859.1928874318498
+            },
+            {
+              "name": "ENTRY",
+              "x": 2950.061746520466,
+              "y": 2015.1132570763402
+            },
+            {
+              "name": "WIR",
+              "x": 3135.9414247002865,
+              "y": 2284.52345318272
+            },
+            {
+              "name": "FAMILY",
+              "x": 3903.78574964135,
+              "y": 2412.140125194503
+            },
+            {
+              "name": "ENS",
+              "x": 3135.9414247002856,
+              "y": 2488.825143427289
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_b96ceec01cb48b58b7",
+              "room": "Laundry",
+              "area_m2": 4.59,
+              "printed_names": [
+                "BATH"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b25ac273484aae3dda",
+              "room": "WC",
+              "area_m2": 4.44,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_9672462d71047ebce3",
+              "room": "Ensuite",
+              "area_m2": 4.23,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d757bee2467efcb2ad",
+              "room": "Bedroom",
+              "area_m2": 7.33,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d9b490de34973c2b70",
+              "room": "Lift",
+              "area_m2": 2.81,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_2cae3bbcc4c07fdfb6",
+              "room": "Pool",
+              "area_m2": 24.68,
+              "printed_names": [
+                "POOL"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_5dfc8455718b9b5c91",
+              "room": "Living",
+              "area_m2": 50.15,
+              "printed_names": [
+                "L I V I N G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_96bbfd46f571f8b107",
+              "room": "Dining",
+              "area_m2": 26.52,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_3c4034e2360fec1da3",
+              "room": "Entry",
+              "area_m2": 5.6,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_85b3be34df373fac0a",
+              "room": "Family",
+              "area_m2": 14.18,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_2bd229e4ab8a69ed76",
+              "room": "Kitchen",
+              "area_m2": 30.31,
+              "printed_names": [
+                "KITCHEN",
+                "BAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_8dbb7c97aa5b781d7f"
+              ],
+              "flags": [
+                "multi_name",
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_8dbb7c97aa5b781d7f",
+              "room": "Bar",
+              "area_m2": 2.13,
+              "printed_names": [
+                "BAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_2bd229e4ab8a69ed76"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 7,
+          "level": "First Floor",
+          "overlay": "2026.06.26-architectural-drawings-1795159765/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 1557.2534416610245
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 1700.5846666429106
+            },
+            {
+              "name": "BAR",
+              "x": 3235.8189383961007,
+              "y": 1978.6959994773665
+            },
+            {
+              "name": "ENS",
+              "x": 3062.0395647541463,
+              "y": 2022.326699450047
+            },
+            {
+              "name": "W IR",
+              "x": 3062.4395748215143,
+              "y": 2170.783594056231
+            },
+            {
+              "name": "BAL",
+              "x": 2818.058424289202,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "WIR",
+              "x": 3331.1713382048206,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "STUDY",
+              "x": 3515.388474542144,
+              "y": 2444.5943650595686
+            },
+            {
+              "name": "ENS",
+              "x": 3323.971156992206,
+              "y": 2474.860819109385
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "BAR",
+              "x": 3235.8189383961007,
+              "y": 1978.6959994773665
+            },
+            {
+              "name": "BAL",
+              "x": 2818.058424289202,
+              "y": 2341.993461141004
+            },
+            {
+              "name": "STUDY",
+              "x": 3515.388474542144,
+              "y": 2444.5943650595686
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_739bd5319e635aee5e",
+              "room": "Bedroom 1",
+              "area_m2": 11.14,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_629125221876674aa6",
+              "room": "ENSUITE (2)",
+              "area_m2": 2.8,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_920c95dbf3e4264bee",
+              "room": "ENSUITE (1)",
+              "area_m2": 3.44,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_18ab75d3b336802c1f",
+              "room": "ENSUITE (3)",
+              "area_m2": 3.9,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_a233b0bc0fceccda95",
+              "room": "WIR (1)",
+              "area_m2": 4.01,
+              "printed_names": [
+                "WIR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ff3bc4be97ad21ad91",
+              "room": "WIR (2)",
+              "area_m2": 6.0,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_2f2b05b7ff653cb496",
+              "room": "WIR (3)",
+              "area_m2": 3.26,
+              "printed_names": [
+                "WIR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_bae1784754485f9ad5",
+              "room": "Bedroom 2",
+              "area_m2": 22.32,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_b36ebca66f41411102",
+              "room": "BAL",
+              "area_m2": 5.29,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_02572f71c9adf86f67",
+              "room": "Family",
+              "area_m2": 18.63,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_4996bd6ef081227c28",
+              "room": "Living",
+              "area_m2": 10.79,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "2026.08.06-architectural-plans-1793621938",
+      "summary": {
+        "trace_parts": 25,
+        "located_labels": 13,
+        "labels_outside": 5,
+        "multi_name_traces": 0,
+        "mismatches": 2,
+        "implausible_areas": 4,
+        "overlaps": 0,
+        "outside_extent": 1,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 30,
+        "placed_windows": 23
+      },
+      "pages": [
+        {
+          "page": 7,
+          "level": "Ground Floor",
+          "overlay": "2026.08.06-architectural-plans-1793621938/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "I N F I N I T Y P O O L",
+              "x": 2619.440925526649,
+              "y": 1084.9042333321454
+            },
+            {
+              "name": "S P A",
+              "x": 3322.083609486816,
+              "y": 1104.5818040361567
+            },
+            {
+              "name": "D E C K",
+              "x": 2619.4784264704645,
+              "y": 1469.3294551544739
+            },
+            {
+              "name": "L I V I N G & D I N I N G",
+              "x": 2288.245090060992,
+              "y": 1784.5206321490932
+            },
+            {
+              "name": "W I R",
+              "x": 3150.1667827210413,
+              "y": 1996.3608072313486
+            },
+            {
+              "name": "W I R",
+              "x": 1952.0991300116614,
+              "y": 2026.1271959519654
+            },
+            {
+              "name": "W I P",
+              "x": 2903.9355856271554,
+              "y": 2094.273598688665
+            },
+            {
+              "name": "L O U N G E",
+              "x": 2586.640100002517,
+              "y": 2348.7568447184312
+            },
+            {
+              "name": "P O R C H",
+              "x": 2586.6275996879117,
+              "y": 2501.564307688653
+            },
+            {
+              "name": "P O R C H",
+              "x": 2577.264864048592,
+              "y": 2513.3158429248474
+            },
+            {
+              "name": "W I R",
+              "x": 2133.9287062593858,
+              "y": 2525.3424140921024
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "W I R",
+              "x": 3150.1667827210413,
+              "y": 1996.3608072313486
+            },
+            {
+              "name": "W I P",
+              "x": 2903.9355856271554,
+              "y": 2094.273598688665
+            },
+            {
+              "name": "P O R C H",
+              "x": 2586.6275996879117,
+              "y": 2501.564307688653
+            },
+            {
+              "name": "P O R C H",
+              "x": 2577.264864048592,
+              "y": 2513.3158429248474
+            },
+            {
+              "name": "W I R",
+              "x": 2133.9287062593858,
+              "y": 2525.3424140921024
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_16101944265bea83f9",
+              "room": "WIR",
+              "area_m2": 5.25,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_767365fa573139b8c1",
+              "room": "WIR",
+              "area_m2": 2.36,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b221edad0eaf1bde6a",
+              "room": "Bathroom",
+              "area_m2": 1.33,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_a5d10f6330dad21e0d",
+              "room": "Bedroom",
+              "area_m2": 14.01,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1733c84ac096db70e6",
+              "room": "Deck",
+              "area_m2": 131.03,
+              "printed_names": [
+                "D E C K"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_76dbb3e319a17004bc",
+              "room": "Existing Garage",
+              "area_m2": 30.23,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_6c073bb19e26f06b3b",
+              "room": "Infinity Pool",
+              "area_m2": 49.53,
+              "printed_names": [
+                "I N F I N I T Y P O O L"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_92a65cf320f8ca7312",
+              "room": "Kitchen",
+              "area_m2": 15.37,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_5cad501e7a613e8b7c",
+              "room": "Living & Dining",
+              "area_m2": 62.74,
+              "printed_names": [
+                "L I V I N G & D I N I N G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_29c1c7cbb1dff19bf6",
+              "room": "Lounge",
+              "area_m2": 2.34,
+              "printed_names": [
+                "L O U N G E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c2f31e4b357cc35ae2",
+              "room": "Porch",
+              "area_m2": 2.88,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_9ed128b89a91ab7ce2",
+              "room": "Spa",
+              "area_m2": 6.38,
+              "printed_names": [
+                "S P A"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_fc42b28556fd566a85",
+              "room": "Store",
+              "area_m2": 11.11,
+              "printed_names": [
+                "W I R"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c3aafcd30c871b1441",
+              "room": "Ensuite",
+              "area_m2": 1.03,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 8,
+          "level": "First",
+          "overlay": "2026.08.06-architectural-plans-1793621938/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "ENS",
+              "x": 3139.516514677383,
+              "y": 2036.1410041691909
+            },
+            {
+              "name": "RU M P U S",
+              "x": 2562.501992499811,
+              "y": 2059.8190975068
+            }
+          ],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_4d881683d4b36de80e",
+              "room": "Bath",
+              "area_m2": 1.96,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_7c4201a5de62350b1e",
+              "room": "Bar",
+              "area_m2": 2.27,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_8526c1d92ce00e2d30",
+              "room": "Concrete HOB",
+              "area_m2": 54.38,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_f5bfab86e2fa48afd3",
+              "room": "Ensuite",
+              "area_m2": 8.54,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_453e7827814c2854d1",
+              "room": "Living",
+              "area_m2": 34.85,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_bf5c4ff0ffcb1705eb",
+              "room": "Living",
+              "area_m2": 10.25,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c52d524d274339a90d",
+              "room": "Master Bedroom",
+              "area_m2": 30.17,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_36522ec7ac380b4473",
+              "room": "Rumpus",
+              "area_m2": 35.93,
+              "printed_names": [
+                "RU M P U S"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_099f67b2be515b03a3",
+              "room": "WC",
+              "area_m2": 3.41,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_76763dc7a1fec78109",
+              "room": "WIP",
+              "area_m2": 6.73,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_007bf91efd56121148",
+              "room": "Corridor",
+              "area_m2": 4.88,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "2026.08.06-architectural-plans-1794999739",
+      "summary": {
+        "trace_parts": 12,
+        "located_labels": 13,
+        "labels_outside": 10,
+        "multi_name_traces": 0,
+        "mismatches": 3,
+        "implausible_areas": 0,
+        "overlaps": 0,
+        "outside_extent": 2,
+        "extent_unavailable_pages": 1,
+        "schedule_windows": 30,
+        "placed_windows": 7
+      },
+      "pages": [
+        {
+          "page": 7,
+          "level": "Ground Floor",
+          "overlay": "2026.08.06-architectural-plans-1794999739/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "I N F I N I T Y P O O L",
+              "x": 2619.440925526649,
+              "y": 1084.9042333321454
+            },
+            {
+              "name": "S P A",
+              "x": 3322.083609486816,
+              "y": 1104.5818040361567
+            },
+            {
+              "name": "D E C K",
+              "x": 2619.4784264704645,
+              "y": 1469.3294551544739
+            },
+            {
+              "name": "L I V I N G & D I N I N G",
+              "x": 2288.245090060992,
+              "y": 1784.5206321490932
+            },
+            {
+              "name": "W I R",
+              "x": 3150.1667827210413,
+              "y": 1996.3608072313486
+            },
+            {
+              "name": "W I R",
+              "x": 1952.0991300116614,
+              "y": 2026.1271959519654
+            },
+            {
+              "name": "L O U N G E",
+              "x": 2586.640100002517,
+              "y": 2348.7568447184312
+            },
+            {
+              "name": "P O R C H",
+              "x": 2586.6275996879117,
+              "y": 2501.564307688653
+            },
+            {
+              "name": "P O R C H",
+              "x": 2577.264864048592,
+              "y": 2513.3158429248474
+            },
+            {
+              "name": "W I R",
+              "x": 2133.9287062593858,
+              "y": 2525.3424140921024
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "I N F I N I T Y P O O L",
+              "x": 2619.440925526649,
+              "y": 1084.9042333321454
+            },
+            {
+              "name": "S P A",
+              "x": 3322.083609486816,
+              "y": 1104.5818040361567
+            },
+            {
+              "name": "D E C K",
+              "x": 2619.4784264704645,
+              "y": 1469.3294551544739
+            },
+            {
+              "name": "L I V I N G & D I N I N G",
+              "x": 2288.245090060992,
+              "y": 1784.5206321490932
+            },
+            {
+              "name": "W I R",
+              "x": 1952.0991300116614,
+              "y": 2026.1271959519654
+            },
+            {
+              "name": "L O U N G E",
+              "x": 2586.640100002517,
+              "y": 2348.7568447184312
+            },
+            {
+              "name": "P O R C H",
+              "x": 2586.6275996879117,
+              "y": 2501.564307688653
+            },
+            {
+              "name": "P O R C H",
+              "x": 2577.264864048592,
+              "y": 2513.3158429248474
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_3b22c0e9af2bce2e0f",
+              "room": "Ensuite (3)",
+              "area_m2": 24.95,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_e22fcfd9ebfa861467",
+              "room": "Ensuite (1)",
+              "area_m2": 12.42,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_fb44f84ed704c1cf2b",
+              "room": "Ensuite (2)",
+              "area_m2": 4.09,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_0ca25c730ffac1a30b",
+              "room": "Toilet (2)",
+              "area_m2": 5.25,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_e7649ac5a9d7bc78f1",
+              "room": "Toilet (3)",
+              "area_m2": 3.24,
+              "printed_names": [
+                "W I R"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_43fc7ed5f4a3179b2c",
+              "room": "Toilet (1)",
+              "area_m2": 2.66,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_16d16699441f980e85",
+              "room": "Store (1)",
+              "area_m2": 5.14,
+              "printed_names": [
+                "W I R"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_be4eefb26c7286426a",
+              "room": "Store (3)",
+              "area_m2": 2.36,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_9e66e21e402ef5962f",
+              "room": "Store (2)",
+              "area_m2": 2.29,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_8ab6a5e6fd17ade5ce",
+              "room": "Bedroom",
+              "area_m2": 30.46,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_7cc2e350025a0d3002",
+              "room": "Living",
+              "area_m2": 78.85,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 8,
+          "level": "First",
+          "overlay": "2026.08.06-architectural-plans-1794999739/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "unavailable; check skipped",
+          "labels": [
+            {
+              "name": "ENS",
+              "x": 3139.516514677383,
+              "y": 2036.1410041691909
+            },
+            {
+              "name": "RU M P U S",
+              "x": 2562.501992499811,
+              "y": 2059.8190975068
+            },
+            {
+              "name": "MINI BAR",
+              "x": 2859.0594561943676,
+              "y": 2296.9250733468743
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "RU M P U S",
+              "x": 2562.501992499811,
+              "y": 2059.8190975068
+            },
+            {
+              "name": "MINI BAR",
+              "x": 2859.0594561943676,
+              "y": 2296.9250733468743
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_6e56f5378c84dff36e",
+              "room": "Ensuite",
+              "area_m2": 2.35,
+              "printed_names": [
+                "ENS"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794567651",
+      "summary": {
+        "trace_parts": 15,
+        "located_labels": 32,
+        "labels_outside": 23,
+        "multi_name_traces": 0,
+        "mismatches": 4,
+        "implausible_areas": 2,
+        "overlaps": 3,
+        "outside_extent": 7,
+        "extent_unavailable_pages": 1,
+        "schedule_windows": 28,
+        "placed_windows": 9
+      },
+      "pages": [
+        {
+          "page": 8,
+          "level": "Ground Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794567651/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "KITCHEN",
+              "x": 2114.5137428880257,
+              "y": 950.2870060056276
+            },
+            {
+              "name": "SITTING",
+              "x": 1647.1026796849944,
+              "y": 1042.40634580656
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "DINING",
+              "x": 2127.2904120490803,
+              "y": 1224.5320818109276
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "LINEN",
+              "x": 1316.934546080842,
+              "y": 1421.3233967494016
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "LIVING",
+              "x": 2247.356097589947,
+              "y": 1559.6024274494982
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_c128079c5ab71d10c3",
+              "room": "Dining",
+              "area_m2": 59.69,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_3eb0f057c603c9bcbf",
+              "room": "Kitchen",
+              "area_m2": 11.62,
+              "printed_names": [
+                "KITCHEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_acbcedaff802d9db12",
+              "room": "Storage (1)",
+              "area_m2": 29.27,
+              "printed_names": [
+                "SITTING"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [
+                "ai_room_trace_efd75fd63c56414541",
+                "ai_room_trace_2b9421e995422eb27e"
+              ],
+              "flags": [
+                "overlap",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_009a1e88470e39c176",
+              "room": "Storage (2)",
+              "area_m2": 6.69,
+              "printed_names": [
+                "LINEN"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_efd75fd63c56414541",
+              "room": "Bedroom",
+              "area_m2": 1.04,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_acbcedaff802d9db12",
+                "ai_room_trace_2b9421e995422eb27e"
+              ],
+              "flags": [
+                "overlap",
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_857527e6f8d940b9f7",
+              "room": "Living (3)",
+              "area_m2": 24.0,
+              "printed_names": [
+                "LIVING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_33955bf19a2fcf96b9",
+              "room": "Living (2)",
+              "area_m2": 9.94,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_2b9421e995422eb27e",
+              "room": "Living (1)",
+              "area_m2": 1.57,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_acbcedaff802d9db12",
+                "ai_room_trace_efd75fd63c56414541"
+              ],
+              "flags": [
+                "overlap",
+                "implausible_area"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 9,
+          "level": "First Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794567651/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "S I T T I N G",
+              "x": 1399.6203482640249,
+              "y": 1610.5256184116586
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_1d574360804cae9fc9",
+              "room": "Bathroom",
+              "area_m2": 4.98,
+              "printed_names": [
+                "B A T H R O O M"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_376e12932888771780",
+              "room": "Corridor (4)",
+              "area_m2": 26.3,
+              "printed_names": [
+                "S I T T I N G"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_43a0078c60fa371a7c",
+              "room": "Corridor (3)",
+              "area_m2": 4.57,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_b7f25bfe584a997fc7",
+              "room": "Corridor (2)",
+              "area_m2": 11.09,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d9513a2229120838cf",
+              "room": "Corridor (1)",
+              "area_m2": 5.49,
+              "printed_names": [
+                "R O B E"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 25,
+          "level": "Basement",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794567651/page_025_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "unavailable; check skipped",
+          "labels": [
+            {
+              "name": "CELLAR",
+              "x": 1698.8094347242513,
+              "y": 1165.507189954223
+            }
+          ],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_0c11e2db14462610af",
+              "room": "CELLAR",
+              "area_m2": 30.75,
+              "printed_names": [
+                "CELLAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_15ccaac25c3778c26e",
+              "room": "Family",
+              "area_m2": 5.62,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794692047",
+      "summary": {
+        "trace_parts": 22,
+        "located_labels": 32,
+        "labels_outside": 18,
+        "multi_name_traces": 1,
+        "mismatches": 1,
+        "implausible_areas": 1,
+        "overlaps": 4,
+        "outside_extent": 15,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 28,
+        "placed_windows": 15
+      },
+      "pages": [
+        {
+          "page": 7,
+          "level": "Basement",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794692047/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "CELLAR",
+              "x": 1674.0562009288624,
+              "y": 1168.545327789677
+            }
+          ],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_3f62b1bd4e98834178",
+              "room": "Storage",
+              "area_m2": 6.32,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c2428b67cf276df282",
+              "room": "Cellar",
+              "area_m2": 34.95,
+              "printed_names": [
+                "CELLAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 8,
+          "level": "Ground Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794692047/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "KITCHEN",
+              "x": 2114.5137428880257,
+              "y": 950.2870060056276
+            },
+            {
+              "name": "SITTING",
+              "x": 1647.1026796849944,
+              "y": 1042.40634580656
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "DINING",
+              "x": 2127.2904120490803,
+              "y": 1224.5320818109276
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "LINEN",
+              "x": 1316.934546080842,
+              "y": 1421.3233967494016
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "LIVING",
+              "x": 2247.356097589947,
+              "y": 1559.6024274494982
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "LIVING",
+              "x": 2247.356097589947,
+              "y": 1559.6024274494982
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_231e80bc17c5415499",
+              "room": "Alfresco",
+              "area_m2": 28.86,
+              "printed_names": [
+                "ALFRESCO"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_8083fb3c11407aaece"
+              ],
+              "flags": [
+                "overlap",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_839991f45221062eb2",
+              "room": "Laundry",
+              "area_m2": 7.87,
+              "printed_names": [
+                "LAUNDRY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_47247074bd390f9b8b",
+              "room": "Linen",
+              "area_m2": 4.0,
+              "printed_names": [
+                "LINEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_e90057437b03cbc9f0",
+              "room": "Study",
+              "area_m2": 14.95,
+              "printed_names": [
+                "STUDY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_33a2649db5be36b085",
+              "room": "Bedroom 5",
+              "area_m2": 7.81,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_8083fb3c11407aaece",
+              "room": "Dining",
+              "area_m2": 25.13,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_231e80bc17c5415499"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_41386113281db8710b",
+              "room": "Entry",
+              "area_m2": 21.26,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_32b14bb24b8cce57d4",
+              "room": "Kitchen",
+              "area_m2": 14.32,
+              "printed_names": [
+                "KITCHEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_d04c69e5cec0e06a77",
+              "room": "Living",
+              "area_m2": 11.98,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c75eebf4f6e7166740",
+              "room": "Living",
+              "area_m2": 1.59,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_ca20f4e4aeb0351a1f",
+              "room": "Living",
+              "area_m2": 9.01,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_56badb26000ce758a3",
+              "room": "Media",
+              "area_m2": 7.5,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_8aa9e5d637d49a3bef",
+              "room": "Scullery",
+              "area_m2": 3.36,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_c6c1161661b4d69829"
+              ],
+              "flags": [
+                "overlap",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_f93f81b36fa2fa9cc7",
+              "room": "Sitting",
+              "area_m2": 9.56,
+              "printed_names": [
+                "SITTING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c6c1161661b4d69829",
+              "room": "Garage",
+              "area_m2": 2.7,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_8aa9e5d637d49a3bef"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 9,
+          "level": "First Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794692047/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "S I T T I N G",
+              "x": 1399.6203482640249,
+              "y": 1610.5256184116586
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_f3d36f0473d62bfe20",
+              "room": "Balcony",
+              "area_m2": 10.48,
+              "printed_names": [
+                "BALCONY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_4405d1139be02d2e21",
+              "room": "Master Bedroom",
+              "area_m2": 7.05,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_6298d60ba2fdd15687",
+              "room": "Bedroom 3",
+              "area_m2": 4.32,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_42c15a460f0b71f163",
+              "room": "Living",
+              "area_m2": 57.76,
+              "printed_names": [
+                "W IR",
+                "E NSU ITE",
+                "BE D R OOM 2",
+                "S I T T I N G"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "multi_name",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_fe43260f3887ef2b6c",
+              "room": "Bedroom 4",
+              "area_m2": 8.53,
+              "printed_names": [
+                "BEDROOM 4"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794981374",
+      "summary": {
+        "trace_parts": 22,
+        "located_labels": 40,
+        "labels_outside": 20,
+        "multi_name_traces": 1,
+        "mismatches": 3,
+        "implausible_areas": 2,
+        "overlaps": 0,
+        "outside_extent": 9,
+        "extent_unavailable_pages": 1,
+        "schedule_windows": 28,
+        "placed_windows": 12
+      },
+      "pages": [
+        {
+          "page": 8,
+          "level": "Ground Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794981374/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "unavailable; check skipped",
+          "labels": [
+            {
+              "name": "LANDSCAPE",
+              "x": 1276.66678544703,
+              "y": 740.0803746167738
+            },
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "KITCHEN",
+              "x": 2114.5137428880257,
+              "y": 950.2870060056276
+            },
+            {
+              "name": "SITTING",
+              "x": 1647.1026796849944,
+              "y": 1042.40634580656
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "DINING",
+              "x": 2127.2904120490803,
+              "y": 1224.5320818109276
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "LINEN",
+              "x": 1316.934546080842,
+              "y": 1421.3233967494016
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "LIVING",
+              "x": 2247.356097589947,
+              "y": 1559.6024274494982
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            },
+            {
+              "name": "P A T I O",
+              "x": 1644.9649004026655,
+              "y": 1805.4665448742178
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "LANDSCAPE",
+              "x": 1276.66678544703,
+              "y": 740.0803746167738
+            },
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "SITTING",
+              "x": 1647.1026796849944,
+              "y": 1042.40634580656
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "LINEN",
+              "x": 1316.934546080842,
+              "y": 1421.3233967494016
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            },
+            {
+              "name": "P A T I O",
+              "x": 1644.9649004026655,
+              "y": 1805.4665448742178
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_cf5990d5f074d8fb0d",
+              "room": "Dining",
+              "area_m2": 41.22,
+              "printed_names": [
+                "KITCHEN",
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "multi_name"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_aed2562c4ae5419ec1",
+              "room": "Living",
+              "area_m2": 13.91,
+              "printed_names": [
+                "LIVING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_de7c937493cade1caf",
+              "room": "Study",
+              "area_m2": 23.77,
+              "printed_names": [
+                "MEDIA"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 9,
+          "level": "First Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794981374/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "V O I D",
+              "x": 1395.0697537683068,
+              "y": 1154.454869598085
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "WATER B A R",
+              "x": 1568.8924621981496,
+              "y": 1310.1750619461595
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "M A K E U P",
+              "x": 1842.1906662390575,
+              "y": 1410.97122338415
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "V O I D",
+              "x": 1645.2649396001852,
+              "y": 1563.6532778967705
+            },
+            {
+              "name": "S I T T I N G",
+              "x": 1399.6203482640249,
+              "y": 1610.5256184116586
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "V O I D",
+              "x": 1395.0697537683068,
+              "y": 1154.454869598085
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_dd4640a463fee14a5f",
+              "room": "Corridor",
+              "area_m2": 4.25,
+              "printed_names": [
+                "WATER B A R"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ad568db26ffe547a16",
+              "room": "Bathroom",
+              "area_m2": 7.25,
+              "printed_names": [
+                "B A T H R O O M"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_3ef672ba804826d0a3",
+              "room": "Bedroom 2",
+              "area_m2": 12.5,
+              "printed_names": [
+                "BE D R OOM 2"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_2aced5513ebb11b693",
+              "room": "Bedroom 3",
+              "area_m2": 10.11,
+              "printed_names": [
+                "BEDROOM 3"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_930fad26b1f99c2ae5",
+              "room": "Bedroom 4",
+              "area_m2": 13.15,
+              "printed_names": [
+                "BEDROOM 4"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_78fde44a4307cc380e",
+              "room": "Ensuite",
+              "area_m2": 4.34,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_0f753434d1b2d05a83",
+              "room": "Ensuite",
+              "area_m2": 7.68,
+              "printed_names": [
+                "E N S U I T E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_8f198f561b3958bb77",
+              "room": "Ensuite",
+              "area_m2": 4.34,
+              "printed_names": [
+                "E NSU ITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d349a95eb52758e142",
+              "room": "Makeup",
+              "area_m2": 1.09,
+              "printed_names": [
+                "M A K E U P"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_f1a5db83d659a16c8d",
+              "room": "Master Bedroom",
+              "area_m2": 14.05,
+              "printed_names": [
+                "MASTER BEDROOM"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_4280908e0cc9c8cf96",
+              "room": "Study nook",
+              "area_m2": 2.94,
+              "printed_names": [
+                "S T U D Y N OOK"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_4d195b5802c018927e",
+              "room": "Sitting",
+              "area_m2": 13.81,
+              "printed_names": [
+                "S I T T I N G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c8bbc5eba2c64981b6",
+              "room": "Void",
+              "area_m2": 5.39,
+              "printed_names": [
+                "V O I D"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_7005ebd490abe6dada",
+              "room": "WIR",
+              "area_m2": 4.0,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_10cbbe2812dcee1035",
+              "room": "Walk in robe",
+              "area_m2": 10.88,
+              "printed_names": [
+                "WAL K I N R O B E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_94ee7a25cb0c790b7e",
+              "room": "Water bar",
+              "area_m2": 1.26,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 25,
+          "level": "Basement",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1794981374/page_025_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "CHILLED CELLAR STORAGE",
+              "x": 1688.5830987421161,
+              "y": 872.3081348956365
+            },
+            {
+              "name": "CELLAR",
+              "x": 1698.8094347242513,
+              "y": 1165.507189954223
+            },
+            {
+              "name": "L I F T",
+              "x": 1491.4073394386442,
+              "y": 1433.5134559657301
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "L I F T",
+              "x": 1491.4073394386442,
+              "y": 1433.5134559657301
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_5a7c11249ecc2b77fe",
+              "room": "Storage",
+              "area_m2": 33.03,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_ba42ff703dfda29ba0",
+              "room": "Cellar",
+              "area_m2": 28.94,
+              "printed_names": [
+                "CELLAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_f80244ace2be9e0c92",
+              "room": "Store",
+              "area_m2": 5.81,
+              "printed_names": [
+                "CHILLED CELLAR STORAGE"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795157091",
+      "summary": {
+        "trace_parts": 20,
+        "located_labels": 37,
+        "labels_outside": 23,
+        "multi_name_traces": 0,
+        "mismatches": 0,
+        "implausible_areas": 1,
+        "overlaps": 0,
+        "outside_extent": 6,
+        "extent_unavailable_pages": 1,
+        "schedule_windows": 28,
+        "placed_windows": 9
+      },
+      "pages": [
+        {
+          "page": 8,
+          "level": "Ground Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795157091/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "KITCHEN",
+              "x": 2114.5137428880257,
+              "y": 950.2870060056276
+            },
+            {
+              "name": "SITTING",
+              "x": 1647.1026796849944,
+              "y": 1042.40634580656
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "DINING",
+              "x": 2127.2904120490803,
+              "y": 1224.5320818109276
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "LINEN",
+              "x": 1316.934546080842,
+              "y": 1421.3233967494016
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "LIVING",
+              "x": 2247.356097589947,
+              "y": 1559.6024274494982
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            },
+            {
+              "name": "P A T I O",
+              "x": 1644.9649004026655,
+              "y": 1805.4665448742178
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "KITCHEN",
+              "x": 2114.5137428880257,
+              "y": 950.2870060056276
+            },
+            {
+              "name": "P A T I O",
+              "x": 1644.9649004026655,
+              "y": 1805.4665448742178
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_d972b6ee0dd7785b1f",
+              "room": "Alfresco",
+              "area_m2": 28.86,
+              "printed_names": [
+                "ALFRESCO"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_bfa3931b655410188e",
+              "room": "Patio",
+              "area_m2": 6.24,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_39969aa7733d4fd4e9",
+              "room": "Bedroom 5",
+              "area_m2": 14.42,
+              "printed_names": [
+                "BEDROOM 5"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_4c4e28d213cff34417",
+              "room": "Dining",
+              "area_m2": 24.25,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_8acf4ecff2d5967d9c",
+              "room": "Ensuite",
+              "area_m2": 3.89,
+              "printed_names": [
+                "EN S U ITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_a533e98802386e1271",
+              "room": "Entry",
+              "area_m2": 12.61,
+              "printed_names": [
+                "ENTRY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_58da9fd680812d4635",
+              "room": "FDR",
+              "area_m2": 1.01,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_5286db2818abe30176",
+              "room": "Kitchen",
+              "area_m2": 4.37,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1b6087d57755851689",
+              "room": "Laundry",
+              "area_m2": 7.4,
+              "printed_names": [
+                "LAUNDRY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_51757537bb377a0e73",
+              "room": "Linen",
+              "area_m2": 3.75,
+              "printed_names": [
+                "LINEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b1ff393245d46e838d",
+              "room": "Living",
+              "area_m2": 11.14,
+              "printed_names": [
+                "LIVING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_0dd644cfa47a4a99ca",
+              "room": "Media",
+              "area_m2": 23.44,
+              "printed_names": [
+                "MEDIA"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d5d662c794df5e28c8",
+              "room": "Scullery",
+              "area_m2": 3.42,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_58ad62fd4e7e1dfa06",
+              "room": "Sitting",
+              "area_m2": 21.94,
+              "printed_names": [
+                "SITTING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_383bcb8a7606fa9e00",
+              "room": "Study",
+              "area_m2": 15.93,
+              "printed_names": [
+                "STUDY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_0c062d544855ab3f91",
+              "room": "WIR",
+              "area_m2": 5.95,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        },
+        {
+          "page": 9,
+          "level": "First Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795157091/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "unavailable; check skipped",
+          "labels": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "V O I D",
+              "x": 1395.0697537683068,
+              "y": 1154.454869598085
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "WATER B A R",
+              "x": 1568.8924621981496,
+              "y": 1310.1750619461595
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "V O I D",
+              "x": 1645.2649396001852,
+              "y": 1563.6532778967705
+            },
+            {
+              "name": "S I T T I N G",
+              "x": 1399.6203482640249,
+              "y": 1610.5256184116586
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "V O I D",
+              "x": 1395.0697537683068,
+              "y": 1154.454869598085
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "WATER B A R",
+              "x": 1568.8924621981496,
+              "y": 1310.1750619461595
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "V O I D",
+              "x": 1645.2649396001852,
+              "y": 1563.6532778967705
+            },
+            {
+              "name": "S I T T I N G",
+              "x": 1399.6203482640249,
+              "y": 1610.5256184116586
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "traces": []
+        },
+        {
+          "page": 25,
+          "level": "Basement",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795157091/page_025_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "CHILLED CELLAR STORAGE",
+              "x": 1688.5830987421161,
+              "y": 872.3081348956365
+            },
+            {
+              "name": "CELLAR",
+              "x": 1698.8094347242513,
+              "y": 1165.507189954223
+            }
+          ],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_b404a033c674e46940",
+              "room": "Storage",
+              "area_m2": 33.03,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_9f226f9371f88afa32",
+              "room": "Cellar",
+              "area_m2": 30.51,
+              "printed_names": [
+                "CELLAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_cc7ae23de1ac8cc02f",
+              "room": "CHILLED CELLAR/STORAGE",
+              "area_m2": 7.79,
+              "printed_names": [
+                "CHILLED CELLAR STORAGE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_1a02111c8c286806f1",
+              "room": "Corridor",
+              "area_m2": 7.98,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795251018",
+      "summary": {
+        "trace_parts": 54,
+        "located_labels": 38,
+        "labels_outside": 8,
+        "multi_name_traces": 0,
+        "mismatches": 6,
+        "implausible_areas": 5,
+        "overlaps": 4,
+        "outside_extent": 12,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 28,
+        "placed_windows": 14
+      },
+      "pages": [
+        {
+          "page": 7,
+          "level": "Basement",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795251018/page_007_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "CHILLED CELLAR STORAGE",
+              "x": 1663.8173633134973,
+              "y": 875.3337701062534
+            },
+            {
+              "name": "CELLAR",
+              "x": 1674.0562009288624,
+              "y": 1168.545327789677
+            }
+          ],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_43a82bae1e2646dc95",
+              "room": "Storage (1)",
+              "area_m2": 32.27,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_1c81593182243e16e1",
+              "room": "Storage (2)",
+              "area_m2": 3.83,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_67eda01061845bfa96",
+              "room": "Cellar",
+              "area_m2": 28.53,
+              "printed_names": [
+                "CELLAR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_fccde5636edb40060b",
+              "room": "CHILLED CELLAR STORAGE",
+              "area_m2": 6.07,
+              "printed_names": [
+                "CHILLED CELLAR STORAGE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d52a408afa8a0ecda9",
+              "room": "Corridor",
+              "area_m2": 4.55,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 8,
+          "level": "Ground Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795251018/page_008_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "KITCHEN",
+              "x": 2114.5137428880257,
+              "y": 950.2870060056276
+            },
+            {
+              "name": "SITTING",
+              "x": 1647.1026796849944,
+              "y": 1042.40634580656
+            },
+            {
+              "name": "EN S U ITE",
+              "x": 1062.9513653802753,
+              "y": 1175.2967452017974
+            },
+            {
+              "name": "DINING",
+              "x": 2127.2904120490803,
+              "y": 1224.5320818109276
+            },
+            {
+              "name": "BIN LOC A T ION",
+              "x": 3874.6061837057096,
+              "y": 1274.7926336567132
+            },
+            {
+              "name": "W IR",
+              "x": 1065.1391511955244,
+              "y": 1293.4965604132542
+            },
+            {
+              "name": "LINEN",
+              "x": 1316.934546080842,
+              "y": 1421.3233967494016
+            },
+            {
+              "name": "MEDIA",
+              "x": 1909.4869579161173,
+              "y": 1482.0611482088111
+            },
+            {
+              "name": "ENTRY",
+              "x": 1648.7278920048936,
+              "y": 1499.1897442358572
+            },
+            {
+              "name": "LIVING",
+              "x": 2247.356097589947,
+              "y": 1559.6024274494982
+            },
+            {
+              "name": "BEDROOM 5",
+              "x": 1129.4975590635356,
+              "y": 1588.095909453614
+            },
+            {
+              "name": "STUDY",
+              "x": 1448.5392390929933,
+              "y": 1613.4762378732519
+            },
+            {
+              "name": "P A T I O",
+              "x": 1644.9649004026655,
+              "y": 1805.4665448742178
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE",
+              "x": 3638.3628205585055,
+              "y": 734.4291881903322
+            },
+            {
+              "name": "SCULLERY",
+              "x": 1990.922596776301,
+              "y": 776.23796564613
+            },
+            {
+              "name": "LAUNDRY",
+              "x": 2246.9185404268965,
+              "y": 776.23796564613
+            },
+            {
+              "name": "ALFRESCO",
+              "x": 2535.831284372068,
+              "y": 898.0510394355549
+            },
+            {
+              "name": "BIN LOC A T ION",
+              "x": 3874.6061837057096,
+              "y": 1274.7926336567132
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_2c30943610262b39e6",
+              "room": "Sitting",
+              "area_m2": 40.11,
+              "printed_names": [
+                "SITTING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_f4b584d01aadc57b05",
+              "room": "Dining",
+              "area_m2": 36.06,
+              "printed_names": [
+                "DINING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_057626df1a275024a8",
+              "room": "Living",
+              "area_m2": 20.19,
+              "printed_names": [
+                "LIVING"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_0af1b95bc00835373b",
+              "room": "Media",
+              "area_m2": 18.58,
+              "printed_names": [
+                "MEDIA"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1801d50bb211a84103",
+              "room": "Bedroom 5",
+              "area_m2": 14.28,
+              "printed_names": [
+                "BEDROOM 5"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_16ca0b043316810f69",
+              "room": "Entry",
+              "area_m2": 11.77,
+              "printed_names": [
+                "ENTRY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c8e9e0625986e0de5a",
+              "room": "Study",
+              "area_m2": 11.58,
+              "printed_names": [
+                "STUDY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_7a9a86f4095a5dfe95",
+              "room": "Patio",
+              "area_m2": 9.44,
+              "printed_names": [
+                "P A T I O"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_bde96b9118e773d6fd",
+              "room": "Kitchen (1)",
+              "area_m2": 5.69,
+              "printed_names": [
+                "KITCHEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_c0ffe3086a7cc0288d",
+              "room": "Kitchen (2)",
+              "area_m2": 4.47,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ca22191adee308c741",
+              "room": "WIR",
+              "area_m2": 4.95,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_bcc96487c7caa32b7b",
+              "room": "Scullery",
+              "area_m2": 3.4,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_59098226f0405a1ea9",
+              "room": "Ensuite (1)",
+              "area_m2": 2.91,
+              "printed_names": [
+                "EN S U ITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_e72d9a931a0723ead3",
+              "room": "Ensuite (2)",
+              "area_m2": 2.27,
+              "printed_names": [
+                "LINEN"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [
+                "ai_room_trace_a6bc01fc1611142fc4"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_96e3ce8532917f4061",
+              "room": "Laundry",
+              "area_m2": 2.19,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_547d6d824099273165",
+              "room": "Toilet",
+              "area_m2": 1.26,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_6e65e0d26509ccbc43",
+              "room": "Alfresco",
+              "area_m2": 2.37,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_a6bc01fc1611142fc4",
+              "room": "Linen",
+              "area_m2": 3.64,
+              "printed_names": [
+                "LINEN"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_e72d9a931a0723ead3"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 9,
+          "level": "First Floor",
+          "overlay": "22008---cc---rev-c8--139a-burns-road-turramurra_1_-1795251018/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1866.268811840027,
+              "y": 981.1809919784973
+            },
+            {
+              "name": "B A T H R O O M",
+              "x": 1633.6259190630606,
+              "y": 1110.6331695434883
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 2318.927947831665,
+              "y": 1144.077690983159
+            },
+            {
+              "name": "V O I D",
+              "x": 1395.0697537683068,
+              "y": 1154.454869598085
+            },
+            {
+              "name": "W IR",
+              "x": 1052.8750489969,
+              "y": 1196.663731048675
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            },
+            {
+              "name": "R O B E",
+              "x": 1819.9002541899774,
+              "y": 1228.5204191340138
+            },
+            {
+              "name": "L IN E N",
+              "x": 1798.034897670717,
+              "y": 1269.1039393557598
+            },
+            {
+              "name": "WATER B A R",
+              "x": 1568.8924621981496,
+              "y": 1310.1750619461595
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 2231.3790103220135,
+              "y": 1326.3159506110621
+            },
+            {
+              "name": "BE D R OOM 2",
+              "x": 1098.7435413177493,
+              "y": 1363.4862542522362
+            },
+            {
+              "name": "S T U D Y N OOK",
+              "x": 1667.2553124517456,
+              "y": 1410.9587207593129
+            },
+            {
+              "name": "WAL K I N R O B E",
+              "x": 2199.849891315968,
+              "y": 1535.5848851371215
+            },
+            {
+              "name": "V O I D",
+              "x": 1645.2649396001852,
+              "y": 1563.6532778967705
+            },
+            {
+              "name": "S I T T I N G",
+              "x": 1399.6203482640249,
+              "y": 1610.5256184116586
+            },
+            {
+              "name": "MASTER BEDROOM",
+              "x": 1909.0243974866075,
+              "y": 1680.4653017512912
+            },
+            {
+              "name": "BALCONY",
+              "x": 1651.4782513154926,
+              "y": 1857.5149720717316
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "GARAGE /",
+              "x": 3548.838624998515,
+              "y": 814.9460921422873
+            },
+            {
+              "name": "STORAGE",
+              "x": 3548.838624998515,
+              "y": 845.6150308680863
+            },
+            {
+              "name": "E NSU ITE",
+              "x": 1198.019010797135,
+              "y": 1210.8041997396163
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_41f3ad6e0a56e98830",
+              "room": "Bathroom (1)",
+              "area_m2": 58.93,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c63b7c94a193668336",
+              "room": "Bathroom (2)",
+              "area_m2": 4.28,
+              "printed_names": [
+                "B A T H R O O M"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_6d3a76ad1376d00634",
+              "room": "Sitting",
+              "area_m2": 11.78,
+              "printed_names": [
+                "S I T T I N G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_30224b39d03efd0faf",
+              "room": "Bedrooms 2",
+              "area_m2": 10.81,
+              "printed_names": [
+                "BE D R OOM 2"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_cfdfebc69f163cb9fc",
+              "room": "Bedrooms 2",
+              "area_m2": 6.24,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b8a07b632413176858",
+              "room": "Corridor (1)",
+              "area_m2": 10.11,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_ab64957775c3a0463b"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_86417a3c2514987153",
+              "room": "Corridor (2)",
+              "area_m2": 1.83,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_ecaff7929d17b630f9",
+              "room": "Bedroom 4",
+              "area_m2": 9.01,
+              "printed_names": [
+                "BEDROOM 4"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_039fe8e0347ff99b30",
+              "room": "Walk in robe (4)",
+              "area_m2": 8.36,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_e6bf38aefc28c13483",
+              "room": "Walk in robe (1)",
+              "area_m2": 7.99,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_13fc973fec86e803a9",
+              "room": "Walk in robe (5)",
+              "area_m2": 6.79,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_f9535ee5e7f0e335de",
+              "room": "Walk in robe (5)",
+              "area_m2": 6.74,
+              "printed_names": [
+                "WAL K I N R O B E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_f1159244c8c09964e3",
+              "room": "Walk in robe (3)",
+              "area_m2": 4.93,
+              "printed_names": [
+                "R O B E"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_bc11194132864bd058",
+              "room": "Walk in robe (2)",
+              "area_m2": 3.19,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1c8c6f0b63403d396e",
+              "room": "Walk in robe (2)",
+              "area_m2": 1.91,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_e3e50cb5c94d7f77fc",
+              "room": "Study nook (2)",
+              "area_m2": 7.16,
+              "printed_names": [
+                "V O I D"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_817cf7bb91d9bcc2f2",
+              "room": "Study nook (3)",
+              "area_m2": 4.64,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_56158e153d03dbe21d",
+              "room": "Study nook (1)",
+              "area_m2": 1.55,
+              "printed_names": [
+                "S T U D Y N OOK"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_843059da2668e07fa1",
+              "room": "Balcony",
+              "area_m2": 6.7,
+              "printed_names": [
+                "BALCONY"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_950bb23989615dfcf3",
+              "room": "Bedroom 3",
+              "area_m2": 6.02,
+              "printed_names": [
+                "BEDROOM 3"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_57337afc6ca0e07b78",
+              "room": "Storage (2)",
+              "area_m2": 5.84,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_a021bcb3e532bdf38d",
+              "room": "Storage (1)",
+              "area_m2": 2.73,
+              "printed_names": [
+                "L IN E N"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_84c249126576040634",
+              "room": "Water bar",
+              "area_m2": 3.82,
+              "printed_names": [
+                "WATER B A R"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_50fbe3d2c0db3f6cb2",
+              "room": "Ensuite (3)",
+              "area_m2": 2.94,
+              "printed_names": [
+                "E N S U I T E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_43f479ab9f110ca365",
+              "room": "Ensuite (1)",
+              "area_m2": 2.49,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1dc5f0bc0df5288477",
+              "room": "Ensuite (2)",
+              "area_m2": 2.35,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_61852d857880a803e0",
+              "room": "Living (1)",
+              "area_m2": 2.36,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_154bbe9ec76119a216",
+              "room": "Living (2)",
+              "area_m2": 0.94,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_ac57a59c0004ab83fe",
+              "room": "Bathroom",
+              "area_m2": 3.44,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ab64957775c3a0463b",
+              "room": "Void",
+              "area_m2": 11.72,
+              "printed_names": [
+                "V O I D"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_b8a07b632413176858"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_f81b8a77afbae2ec2f",
+              "room": "Master Bedroom",
+              "area_m2": 15.39,
+              "printed_names": [
+                "MASTER BEDROOM"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795317033",
+      "summary": {
+        "trace_parts": 33,
+        "located_labels": 21,
+        "labels_outside": 2,
+        "multi_name_traces": 0,
+        "mismatches": 3,
+        "implausible_areas": 7,
+        "overlaps": 2,
+        "outside_extent": 13,
+        "extent_unavailable_pages": 0,
+        "schedule_windows": 26,
+        "placed_windows": 24
+      },
+      "pages": [
+        {
+          "page": 9,
+          "level": "Ground Floor",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795317033/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "OFFICE",
+              "x": 1454.179429996976,
+              "y": 742.8455791524136
+            },
+            {
+              "name": "L O U N G E",
+              "x": 1756.3379783623964,
+              "y": 742.8455791524136
+            },
+            {
+              "name": "B A L C O N Y",
+              "x": 485.0890619225213,
+              "y": 762.947489072596
+            },
+            {
+              "name": "PORCH",
+              "x": 2012.0230991499513,
+              "y": 929.7633385594831
+            },
+            {
+              "name": "D I N IN G",
+              "x": 841.1227782817592,
+              "y": 1033.8607290478906
+            },
+            {
+              "name": "F A M I L Y",
+              "x": 493.0284287538219,
+              "y": 1070.4767080007603
+            },
+            {
+              "name": "W IR",
+              "x": 1547.5138762893523,
+              "y": 1087.5783328582288
+            },
+            {
+              "name": "B E D R O O M 1",
+              "x": 1774.4797441454155,
+              "y": 1154.784718263018
+            },
+            {
+              "name": "P A N T R Y",
+              "x": 1373.5604735745726,
+              "y": 1158.985117350817
+            },
+            {
+              "name": "K I T C H E N",
+              "x": 1122.5264464267714,
+              "y": 1191.9632506651465
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 1547.4763674696771,
+              "y": 1200.364048840745
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "PORCH",
+              "x": 2012.0230991499513,
+              "y": 929.7633385594831
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_5104f28d5ca9158eb6",
+              "room": "Butler's pantry",
+              "area_m2": 6.3,
+              "printed_names": [
+                "P A N T R Y"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_74c5904e629e897df9",
+              "room": "WIR",
+              "area_m2": 2.9,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_a828f6f53b360ea571",
+              "room": "Powder room",
+              "area_m2": 2.42,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_aa7d54f99eb1f6f758"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_12f30bd76bbff6cd54",
+              "room": "Storage (2)",
+              "area_m2": 1.69,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_117549ea05dc45b821",
+              "room": "Storage (4)",
+              "area_m2": 1.62,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_63bd80d63efa099de6",
+              "room": "Storage (1)",
+              "area_m2": 1.52,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_2095dc9aac0f937fa2",
+              "room": "Storage (3)",
+              "area_m2": 1.47,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_558cfd5513d7a5b832",
+              "room": "Dining",
+              "area_m2": 27.4,
+              "printed_names": [
+                "D I N IN G"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1b3228ea00b3bef983",
+              "room": "Balcony",
+              "area_m2": 16.67,
+              "printed_names": [
+                "B A L C O N Y"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_7a2166c69088b222d6",
+              "room": "Ensuite",
+              "area_m2": 5.42,
+              "printed_names": [
+                "E N S U I T E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_46ca35904bc8ddf702",
+              "room": "Family room",
+              "area_m2": 35.69,
+              "printed_names": [
+                "F A M I L Y"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_952577f74bd526149d",
+              "room": "Kitchen",
+              "area_m2": 29.26,
+              "printed_names": [
+                "K I T C H E N"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_476634676e411d6fde",
+              "room": "Laundry",
+              "area_m2": 8.13,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ff30b6733bd5deabc4",
+              "room": "Lounge",
+              "area_m2": 19.57,
+              "printed_names": [
+                "L O U N G E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_832f9e3e2970868943",
+              "room": "Office",
+              "area_m2": 14.71,
+              "printed_names": [
+                "OFFICE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c2a62701232b5d3535",
+              "room": "Porch",
+              "area_m2": 2.46,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_b4d60a4d8fbc400ae5",
+              "room": "Corridor",
+              "area_m2": 19.03,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_aa7d54f99eb1f6f758",
+              "room": "Toilet",
+              "area_m2": 7.25,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [
+                "ai_room_trace_a828f6f53b360ea571"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_af2f6382c86959597c",
+              "room": "Bedroom 1",
+              "area_m2": 14.68,
+              "printed_names": [
+                "B E D R O O M 1"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 10,
+          "level": "First Floor",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795317033/page_010_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "BEDROOM 2",
+              "x": 1172.6632353929376,
+              "y": 712.2426715127328
+            },
+            {
+              "name": "ENSUITE",
+              "x": 1350.780117091691,
+              "y": 728.7442393576588
+            },
+            {
+              "name": "ENSUITE",
+              "x": 1512.8057151496826,
+              "y": 728.7442393576588
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 1779.7059730201927,
+              "y": 724.2438117635879
+            },
+            {
+              "name": "LINEN",
+              "x": 1380.2745522964756,
+              "y": 822.6531618206005
+            },
+            {
+              "name": "CORRIDOR",
+              "x": 1380.124517017774,
+              "y": 909.3614001330294
+            },
+            {
+              "name": "ENSUITE",
+              "x": 1820.077965930854,
+              "y": 942.6645643291524
+            },
+            {
+              "name": "WIR",
+              "x": 1235.3654789503746,
+              "y": 1089.9785609084001
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1747.8984939354232,
+              "y": 1091.7662307582668
+            },
+            {
+              "name": "BEDROOM",
+              "x": 893.8351728656386,
+              "y": 1104.6799577156976
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "LINEN",
+              "x": 1380.2745522964756,
+              "y": 822.6531618206005
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_4af633dd3b90426561",
+              "room": "Wir",
+              "area_m2": 28.77,
+              "printed_names": [
+                "WIR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_d7254f5ac19ae2564d",
+              "room": "Corridor (1)",
+              "area_m2": 17.51,
+              "printed_names": [
+                "CORRIDOR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_79ef777554d5482d86",
+              "room": "Corridor (2)",
+              "area_m2": 2.83,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_d1e2f6c6e3dfd531ff",
+              "room": "Bedroom 3",
+              "area_m2": 15.48,
+              "printed_names": [
+                "BEDROOM 3"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_72cd4c6b2786a9a81c",
+              "room": "Bedroom 2",
+              "area_m2": 15.24,
+              "printed_names": [
+                "BEDROOM 2"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_90caa2432276de03a9",
+              "room": "Bedroom 4",
+              "area_m2": 15.18,
+              "printed_names": [
+                "BEDROOM 4"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_433a12a3261be97f23",
+              "room": "Ensuite (4)",
+              "area_m2": 5.15,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_8b8a708b4e3e7367c0",
+              "room": "Ensuite (2)",
+              "area_m2": 2.6,
+              "printed_names": [
+                "ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_77c0618508b1907a9c",
+              "room": "Ensuite (3)",
+              "area_m2": 1.98,
+              "printed_names": [
+                "ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_c6d5293f100b7ce207",
+              "room": "Ensuite (1)",
+              "area_m2": 1.71,
+              "printed_names": [
+                "ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_ac6b24683224189453",
+              "room": "Master Bedroom",
+              "area_m2": 3.64,
+              "printed_names": [
+                "BEDROOM"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_e94062a369481c913c",
+              "room": "Balcony",
+              "area_m2": 1.45,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area",
+                "outside_extent"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 17,
+          "level": "Lower Ground",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795317033/page_017_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_17b64a7034e562b233",
+              "room": "Dining",
+              "area_m2": 29.41,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_22dba35c26a6fbfef4",
+              "room": "Living",
+              "area_m2": 63.11,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795345309",
+      "summary": {
+        "trace_parts": 34,
+        "located_labels": 21,
+        "labels_outside": 3,
+        "multi_name_traces": 0,
+        "mismatches": 4,
+        "implausible_areas": 6,
+        "overlaps": 2,
+        "outside_extent": 11,
+        "extent_unavailable_pages": 1,
+        "schedule_windows": 26,
+        "placed_windows": 23
+      },
+      "pages": [
+        {
+          "page": 9,
+          "level": "Ground Floor",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795345309/page_009_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "OFFICE",
+              "x": 1454.179429996976,
+              "y": 742.8455791524136
+            },
+            {
+              "name": "B A L C O N Y",
+              "x": 485.0890619225213,
+              "y": 762.947489072596
+            },
+            {
+              "name": "PORCH",
+              "x": 2012.0230991499513,
+              "y": 929.7633385594831
+            },
+            {
+              "name": "D I N IN G",
+              "x": 841.1227782817592,
+              "y": 1033.8607290478906
+            },
+            {
+              "name": "F A M I L Y",
+              "x": 493.0284287538219,
+              "y": 1070.4767080007603
+            },
+            {
+              "name": "W IR",
+              "x": 1547.5138762893523,
+              "y": 1087.5783328582288
+            },
+            {
+              "name": "B E D R O O M 1",
+              "x": 1774.4797441454155,
+              "y": 1154.784718263018
+            },
+            {
+              "name": "P A N T R Y",
+              "x": 1373.5604735745726,
+              "y": 1158.985117350817
+            },
+            {
+              "name": "K I T C H E N",
+              "x": 1122.5264464267714,
+              "y": 1191.9632506651465
+            },
+            {
+              "name": "E N S U I T E",
+              "x": 1547.4763674696771,
+              "y": 1200.364048840745
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "PORCH",
+              "x": 2012.0230991499513,
+              "y": 929.7633385594831
+            },
+            {
+              "name": "F A M I L Y",
+              "x": 493.0284287538219,
+              "y": 1070.4767080007603
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_f9640bc52aba1b1fa4",
+              "room": "Bedroom 1",
+              "area_m2": 13.19,
+              "printed_names": [
+                "B E D R O O M 1"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_3890545a725f26b6e2",
+              "room": "Garage",
+              "area_m2": 8.61,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_1f923f7defd415086d",
+              "room": "Butler's pantry",
+              "area_m2": 6.3,
+              "printed_names": [
+                "P A N T R Y"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [
+                "ai_room_trace_42808190f07138e728"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_e575fc43e71f840b3d",
+              "room": "WIR",
+              "area_m2": 2.9,
+              "printed_names": [
+                "W IR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_2280be5b71d06a4967",
+              "room": "Storage (2)",
+              "area_m2": 1.69,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_05e27ec838105b87a6",
+              "room": "Storage (1)",
+              "area_m2": 1.52,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_073462b945956d10d5",
+              "room": "Porch (2)",
+              "area_m2": 1.62,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_6c12a986813a5174a3",
+              "room": "Porch (1)",
+              "area_m2": 1.47,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area",
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_66f403689cac62f4de",
+              "room": "Balcony",
+              "area_m2": 12.36,
+              "printed_names": [
+                "B A L C O N Y"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_61212dd03d10c81fca",
+              "room": "Ensuite",
+              "area_m2": 5.42,
+              "printed_names": [
+                "E N S U I T E"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_3a5e36dc5666c08856",
+              "room": "Kitchen",
+              "area_m2": 19.9,
+              "printed_names": [
+                "K I T C H E N"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_73b9bf73cd5a8fb7d7",
+              "room": "Laundry",
+              "area_m2": 10.26,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_692040637ca67b4a08",
+              "room": "Office",
+              "area_m2": 14.71,
+              "printed_names": [
+                "OFFICE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_14ff80e0361e953316",
+              "room": "Timber dining",
+              "area_m2": 18.86,
+              "printed_names": [
+                "D I N IN G"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_128fad07975c7dc5f1",
+              "room": "Timber lounge",
+              "area_m2": 19.67,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_5eb8f2520190aaf05d",
+              "room": "Corridor",
+              "area_m2": 30.92,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_42808190f07138e728",
+              "room": "Store",
+              "area_m2": 8.91,
+              "printed_names": [
+                "P A N T R Y"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [
+                "ai_room_trace_1f923f7defd415086d"
+              ],
+              "flags": [
+                "overlap"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 10,
+          "level": "First Floor",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795345309/page_010_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [
+            {
+              "name": "BEDROOM 2",
+              "x": 1172.6632353929376,
+              "y": 712.2426715127328
+            },
+            {
+              "name": "ENSUITE",
+              "x": 1350.780117091691,
+              "y": 728.7442393576588
+            },
+            {
+              "name": "ENSUITE",
+              "x": 1512.8057151496826,
+              "y": 728.7442393576588
+            },
+            {
+              "name": "BEDROOM 4",
+              "x": 1779.7059730201927,
+              "y": 724.2438117635879
+            },
+            {
+              "name": "LINEN",
+              "x": 1380.2745522964756,
+              "y": 822.6531618206005
+            },
+            {
+              "name": "CORRIDOR",
+              "x": 1380.124517017774,
+              "y": 909.3614001330294
+            },
+            {
+              "name": "ENSUITE",
+              "x": 1820.077965930854,
+              "y": 942.6645643291524
+            },
+            {
+              "name": "MASTER ENSUITE",
+              "x": 1453.841850619897,
+              "y": 1030.8729451729382
+            },
+            {
+              "name": "WIR",
+              "x": 1235.3654789503746,
+              "y": 1089.9785609084001
+            },
+            {
+              "name": "BEDROOM 3",
+              "x": 1747.8984939354232,
+              "y": 1091.7662307582668
+            },
+            {
+              "name": "BEDROOM",
+              "x": 893.8351728656386,
+              "y": 1104.6799577156976
+            }
+          ],
+          "labels_outside": [
+            {
+              "name": "LINEN",
+              "x": 1380.2745522964756,
+              "y": 822.6531618206005
+            }
+          ],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_de5f2540bbec329d2b",
+              "room": "Master Bedroom",
+              "area_m2": 23.24,
+              "printed_names": [
+                "BEDROOM"
+              ],
+              "name_mismatch": true,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_31c28d46f4c5960394",
+              "room": "Corridor (2)",
+              "area_m2": 18.55,
+              "printed_names": [
+                "CORRIDOR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_647774f3602cf2bbe4",
+              "room": "Corridor (1)",
+              "area_m2": 9.98,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_6adfdda7711c8b2c29",
+              "room": "Bedroom 3",
+              "area_m2": 17.66,
+              "printed_names": [
+                "BEDROOM 3"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "outside_extent"
+              ]
+            },
+            {
+              "trace_id": "ai_room_trace_cf887462ad80a3694e",
+              "room": "Bedroom 2",
+              "area_m2": 15.99,
+              "printed_names": [
+                "BEDROOM 2"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_a17ebf7127c4db1116",
+              "room": "Bedroom 4",
+              "area_m2": 15.51,
+              "printed_names": [
+                "BEDROOM 4"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_1e6a8bfd43f53aa4d8",
+              "room": "Wir",
+              "area_m2": 12.88,
+              "printed_names": [
+                "WIR"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_5d44671547371beee0",
+              "room": "Master ensuite",
+              "area_m2": 6.64,
+              "printed_names": [
+                "MASTER ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_18490d4970a69378f6",
+              "room": "Ensuite (2)",
+              "area_m2": 5.07,
+              "printed_names": [
+                "ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_e150c7dbe517df6223",
+              "room": "Ensuite (1)",
+              "area_m2": 4.17,
+              "printed_names": [
+                "ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_7e0a7032db6e925f25",
+              "room": "Ensuite (3)",
+              "area_m2": 3.32,
+              "printed_names": [
+                "ENSUITE"
+              ],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_ecb5ee21f47238baa0",
+              "room": "Ensuite (4)",
+              "area_m2": 1.78,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 17,
+          "level": "Lower Ground",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795345309/page_017_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": false,
+          "outer_extent": "available",
+          "labels": [],
+          "labels_outside": [],
+          "traces": [
+            {
+              "trace_id": "ai_room_trace_b0bf13d8987389540c",
+              "room": "Dining",
+              "area_m2": 62.36,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_a7a0ab88a1e776a953",
+              "room": "Store",
+              "area_m2": 28.98,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_7c1473aaf8a0a4c28d",
+              "room": "Corridor",
+              "area_m2": 12.66,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b3a7326902ca15c43d",
+              "room": "Corridor",
+              "area_m2": 5.98,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": []
+            },
+            {
+              "trace_id": "ai_room_trace_b5afbe8504211a60ea",
+              "room": "Office",
+              "area_m2": 116.58,
+              "printed_names": [],
+              "name_mismatch": false,
+              "overlaps_with": [],
+              "flags": [
+                "implausible_area"
+              ]
+            }
+          ]
+        },
+        {
+          "page": 19,
+          "level": "First Floor",
+          "overlay": "architectural-plan---132-old-south-head-road_-vaucluse---1h-20251124-1795345309/page_019_review.png",
+          "screenshot_missing": false,
+          "rendered_from_pdf": true,
+          "outer_extent": "unavailable; check skipped",
+          "labels": [],
+          "labels_outside": [],
+          "traces": []
+        }
+      ]
+    }
+  ]
+}
