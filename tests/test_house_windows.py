@@ -254,5 +254,50 @@ class PlacementTests(unittest.TestCase):
         self.assertIn("assumed 2,100 mm", opening["assumptions"][0])
 
 
+
+def char(text, x, top, matrix, size=3.0):
+    return {"text": text, "x0": x, "x1": x + size, "top": top, "bottom": top + size, "size": size, "matrix": matrix}
+
+
+UP_THE_PAGE = (0.0, 1.0, -1.0, 0.0, 0, 0)      # set 16 p6's "WG_09": rotated 90°, read bottom to top
+ACROSS = (1.0, 0.0, 0.0, 1.0, 0, 0)
+
+
+class RotatedTagTests(unittest.TestCase):
+    """A tag beside a wall running up the sheet is printed rotated; position-order words split it into letters, so
+    every window on those walls was missed (set 16: no east or west glass, 2026-11-28)."""
+
+    def rotated(self, text, x, bottom):
+        return [char(letter, x, bottom - 2.2 * index, UP_THE_PAGE) for index, letter in enumerate(text)]
+
+    def test_rotated_marks_are_read_as_whole_words(self):
+        chars = (self.rotated("WG_09", 1087.5, 679.6) + self.rotated("WG_11", 1087.5, 1013.9)
+                 + [char(letter, 1259.9 + 3.6 * index, 562.1, ACROSS) for index, letter in enumerate("WG_07")])
+        words = hw.rotated_words(chars)
+        self.assertEqual(sorted(word["text"] for word in words), ["WG_09", "WG_11"])
+        tags = hw.find_window_tags(words, 6)
+        self.assertEqual(sorted(tag["mark"] for tag in tags), ["WG_09", "WG_11"])
+        nine = [tag for tag in tags if tag["mark"] == "WG_09"][0]
+        self.assertAlmostEqual(nine["x"], 1089.0, delta=1.0)        # the tag sits where its letters are
+        self.assertTrue(670 <= nine["y"] <= 683)
+
+    def test_text_read_down_the_page_is_read_top_to_bottom(self):
+        down = (0.0, -1.0, 1.0, 0.0, 0, 0)
+        chars = [char(letter, 40.0, 100 + 2.2 * index, down) for index, letter in enumerate("W12")]
+        self.assertEqual([word["text"] for word in hw.rotated_words(chars)], ["W12"])
+
+    def test_a_wide_letter_after_a_narrow_one_stays_in_the_word(self):
+        # Set 16 p7's "HLW_01", as printed: each letter's extent along the line, in page coordinates.
+        extents = [("H", 933.29, 936.10, 2.81), ("L", 931.23, 933.39, 2.16), ("W", 927.66, 931.33, 3.67),
+                   ("_", 925.59, 927.76, 2.16), ("0", 923.44, 925.60, 2.16), ("1", 921.29, 923.45, 2.16)]
+        chars = [{"text": text, "x0": 1664.82, "x1": 1668.7, "top": top, "bottom": bottom, "size": size,
+                  "matrix": UP_THE_PAGE} for text, top, bottom, size in extents]
+        self.assertEqual([word["text"] for word in hw.rotated_words(chars)], ["HLW_01"])
+
+    def test_a_gap_along_the_line_ends_the_word(self):
+        chars = self.rotated("W1", 50.0, 300) + self.rotated("W2", 50.0, 250)
+        self.assertEqual(sorted(word["text"] for word in hw.rotated_words(chars)), ["W1", "W2"])
+
+
 if __name__ == "__main__":
     unittest.main()
