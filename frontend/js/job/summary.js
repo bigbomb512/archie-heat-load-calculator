@@ -4,7 +4,6 @@
 import { labelBadge, getJson, sendJson, escapeHtml, fmt } from "./api.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
-const SHOWN = 4;
 const SEVERITY = {
   blocks: "Not in the total",
   changes_number: "Changes the total",
@@ -100,131 +99,138 @@ function actionButton(action, todo, style = "secondary") {
   return `<button type="button" class="job-button ${style === "primary" ? "" : "secondary"} job-todo-act" data-action="${escapeHtml(action.type)}" data-todo-id="${escapeHtml(todo.id)}"${action.value !== undefined ? ` data-value="${escapeHtml(String(action.value))}"` : ""}>${escapeHtml(action.label || "Fix")}</button>`;
 }
 
-function actionControls(todo, projectId, uses) {
+// The to-do list is one form (user decision 2026-11-28): every question is stated plainly with two options, the
+// recommended one already chosen, and any missing detail (an area) asked in the same place. One "Save all and update
+// the load" saves every answer and recalculates once, so the result comes back clean. Items with nothing to answer
+// here are one line each: what's still being worked out, and what to look at on another screen.
+
+function roomLabel(todo) {
   const room = todo.room || {};
-  return (todo.actions || [])
-    .map((action) => {
-      if (action.type === "area")
-        return `<span class="job-todo-field"><label><span class="job-sr-only">Area of ${escapeHtml(room.name || "the room")} in m²</span><input type="number" inputmode="decimal" min="0.5" step="0.1" data-input="area" placeholder="m²"${Number(room.area_m2) > 0 ? ` value="${Number(room.area_m2)}"` : ""}></label><span>m²</span>${actionButton(action, todo)}</span>`;
-      if (action.type === "rename")
-        return `<details class="job-todo-more"><summary>${escapeHtml(action.label || "Rename")}</summary><span class="job-todo-field"><label><span class="job-sr-only">New name for ${escapeHtml(room.name || "the room")}</span><input type="text" maxlength="80" data-input="name" value="${escapeHtml(room.name || "")}"></label>${actionButton({ ...action, label: "Save name" }, todo)}</span></details>`;
-      if (action.type === "use")
-        return `<details class="job-todo-more"><summary>${escapeHtml(action.label || "Change use")}</summary><span class="job-todo-field"><label><span class="job-sr-only">Use of ${escapeHtml(room.name || "the room")}</span><select data-input="use">${Object.entries(uses || {})
-          .map(([id, label]) => `<option value="${escapeHtml(id)}"${id === room.use_id ? " selected" : ""}>${escapeHtml(label)}</option>`)
-          .join("")}</select></label>${actionButton({ ...action, label: "Save use" }, todo)}</span></details>`;
-      if (action.type === "link") {
-        const step = action.step || todo.step || "drawings";
-        return `<a class="job-todo-link job-button secondary" href="#/job/${encodeURIComponent(projectId)}/${encodeURIComponent(step)}">${escapeHtml(action.label || "Open")}</a>`;
-      }
-      if (action.type === "recalculate") return "";
-      return actionButton(action, todo);
-    })
-    .join("");
+  return escapeHtml(room.name || todo.title || "the room");
 }
 
-const SECTION_TITLE = {
-  blocks: "Not in the total yet",
-  changes_number: "Could change the total",
-  check: "Worth a check",
-};
-const GROUP_AT = 3;
+function radio(name, value, label, checked, extra = "") {
+  return `<label class="job-choice"><input type="radio" name="${escapeHtml(name)}" value="${escapeHtml(value)}"${checked ? " checked" : ""}${extra}><span>${label}</span></label>`;
+}
 
-function todoItem(todo, projectId, uses, index) {
+// What the question is, its two options and which is recommended; null when the item has nothing to answer here.
+function question(todo, uses) {
+  const actions = todo.actions || [];
+  const find = (type) => actions.find((action) => action.type === type);
+  const area = find("area");
+  const cooled = find("cooled");
+  const join = find("join");
+  const use = find("use");
+  const rename = find("rename");
+  // A room still being worked out has nothing to answer here: it is listed under "Not in the total yet", never offered
+  // as "Not cooled" (a bedroom waiting for its walls isn't a question).
+  if (todo.kind === "room_not_counted" && !area) return null;
+  const name = `q-${todo.id}`;
+  const recommendedTag = ` <em class="job-choice-tag">recommended</em>`;
+  let options = "";
+  if (area) {
+    const room = todo.room || {};
+    options = radio(name, "area", `Type its area <span class="job-todo-field"><input type="number" inputmode="decimal" min="0.5" step="0.1" data-input="area" aria-label="Area of ${roomLabel(todo)} in m²" placeholder="m²"${Number(room.area_m2) > 0 ? ` value="${Number(room.area_m2)}"` : ""}> m²</span>${recommendedTag}`, true)
+      + (cooled ? radio(name, "cooled", escapeHtml(cooled.label || "Not a cooled room"), false) : "");
+  } else if (join) {
+    options = radio(name, "join", `${escapeHtml(join.label || "Join into one room")}${recommendedTag}`, true)
+      + radio(name, "keep", "Keep them separate", false);
+  } else if (cooled) {
+    // Counted as cooled but probably outdoor: not cooling it is recommended. Not cooled, worth a check: leave it.
+    const recommendChange = todo.severity !== "check";
+    options = radio(name, "cooled", `${escapeHtml(cooled.label || "Change")}${recommendChange ? recommendedTag : ""}`, recommendChange)
+      + radio(name, "keep", `Leave it as it is${recommendChange ? "" : recommendedTag}`, !recommendChange);
+  } else if (!use && !rename) {
+    return null;
+  }
+  const more = [
+    use ? `<label class="job-todo-field"><span>Use</span><select data-input="use"><option value="">Keep its use</option>${Object.entries(uses || {})
+      .map(([id, label]) => `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`).join("")}</select></label>` : "",
+    rename ? `<label class="job-todo-field"><span>Name</span><input type="text" maxlength="80" data-input="name" placeholder="${escapeHtml((todo.room || {}).name || "")}"></label>` : "",
+  ].filter(Boolean).join("");
+  return { options, more };
+}
+
+function questionItem(todo, uses) {
+  const q = question(todo, uses);
   const impact = todo.impact && Number.isFinite(Number(todo.impact.kw)) ? `<span class="job-todo-impact" data-todo-impact>${escapeHtml(todo.impact.text || `${fmt(todo.impact.kw)} kW`)}</span>` : "";
-  return `<li class="job-todo ${escapeHtml(todo.severity || "check")}" data-todo="${escapeHtml(todo.id)}" data-todo-kind="${escapeHtml(todo.kind || "")}"${index >= SHOWN ? " data-todo-extra hidden" : ""}>
+  return `<li class="job-todo job-question ${escapeHtml(todo.severity || "check")}" data-todo="${escapeHtml(todo.id)}" data-todo-kind="${escapeHtml(todo.kind || "")}">
     <span class="job-todo-severity job-sr-only">${escapeHtml(SEVERITY[todo.severity] || "Check")}</span>
-    <div class="job-todo-body">
-      <p class="job-todo-title"><strong>${escapeHtml(todo.title || "")}</strong>${impact}</p>
-      ${todo.detail ? `<p class="job-todo-detail">${escapeHtml(todo.detail)}</p>` : ""}
-      <div class="job-todo-actions">${actionControls(todo, projectId, uses)}</div>
-      <p class="job-todo-message" data-todo-message role="status"></p>
-    </div>
+    <p class="job-todo-title"><strong>${escapeHtml(todo.title || "")}</strong>${impact}</p>
+    ${todo.detail ? `<p class="job-todo-detail">${escapeHtml(todo.detail)}</p>` : ""}
+    ${q.options ? `<div class="job-choices" role="radiogroup" aria-label="${escapeHtml(todo.title || "")}">${q.options}</div>` : ""}
+    ${q.more ? `<details class="job-todo-more"><summary>Change its use or name</summary><div class="job-todo-fields">${q.more}</div></details>` : ""}
   </li>`;
-}
-
-// Rooms with the same problem and nothing to type are one card: the reason once, then each room as a chip that
-// opens it (2026-11-28: 16 cards said "walls and windows weren't worked out", each offering "Not cooled").
-function groupable(todo) {
-  return Boolean(todo.room?.room_id && todo.detail) && (todo.actions || []).every((action) => ["link", "cooled"].includes(action.type));
 }
 
 function groupReason(detail) {
   const text = String(detail || "")
     .replace(/^Its\s+/i, "")
-    .replace(/,?\s*so it has no load yet\.?$/i, ".")
-    .replace(/^It\s+was\s+/i, "");
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-function todoGroup(rows, projectId, index) {
-  const first = rows[0];
-  const chips = rows
-    .map((todo) => `<a class="job-todo-chip" data-todo="${escapeHtml(todo.id)}" href="#/job/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(todo.room.room_id)}">${escapeHtml(todo.room.name || todo.title)}</a>`)
-    .join("");
-  return `<li class="job-todo job-todo-group ${escapeHtml(first.severity || "check")}" data-todo-group="${escapeHtml(first.kind || "")}"${index >= SHOWN ? " data-todo-extra hidden" : ""}>
-    <span class="job-todo-severity job-sr-only">${escapeHtml(SEVERITY[first.severity] || "Check")}</span>
-    <div class="job-todo-body">
-      <p class="job-todo-title"><strong>${rows.length} rooms</strong><span class="job-todo-reason">${escapeHtml(groupReason(first.detail))}</span></p>
-      <div class="job-todo-chips">${chips}</div>
-    </div>
-  </li>`;
-}
-
-// Entries in the server's order: a group sits where its first room was.
-function entries(todos) {
-  const counts = new Map();
-  todos.forEach((todo) => {
-    if (!groupable(todo)) return;
-    const key = `${todo.severity}|${todo.kind}|${todo.detail}`;
-    counts.set(key, (counts.get(key) || 0) + 1);
-  });
-  const placed = new Map();
-  const list = [];
-  todos.forEach((todo) => {
-    const key = `${todo.severity}|${todo.kind}|${todo.detail}`;
-    if (groupable(todo) && counts.get(key) >= GROUP_AT) {
-      if (!placed.has(key)) {
-        const group = { group: [] };
-        placed.set(key, group);
-        list.push(group);
-      }
-      placed.get(key).group.push(todo);
-    } else list.push({ todo });
-  });
-  return list;
+    .replace(/,?\s*so it has no load yet\.?$/i, "")
+    .replace(/^It\s+was\s+/i, "")
+    .replace(/\.$/, "");
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
 function todoList(summary, projectId) {
   const todos = (summary.todos || []).filter((todo) => todo.kind !== "update_load" || !(todo.actions || []).some((a) => a.type === "recalculate"));
   if (!todos.length) return "";
-  // Sections follow the list's own order (the server sorts by severity): a new heading starts where the severity changes.
-  const runs = [];
-  entries(todos).forEach((entry) => {
-    const severity = (entry.group ? entry.group[0] : entry.todo).severity || "check";
-    if (!runs.length || runs[runs.length - 1].severity !== severity) runs.push({ severity, rows: [] });
-    runs[runs.length - 1].rows.push(entry);
+  const asked = new Set();
+  const questions = [];
+  const waiting = [];
+  const elsewhere = [];
+  todos.forEach((todo) => {
+    if (question(todo, summary.uses)) {
+      questions.push(todo);
+      if (todo.room?.room_id) asked.add(todo.room.room_id);
+    }
   });
-  let index = 0;
-  const sections = runs
-    .map(({ severity, rows }) => {
-      const start = index;
-      const items = rows.map((entry) => {
-        const html = entry.group ? todoGroup(entry.group, projectId, index) : todoItem(entry.todo, projectId, summary.uses, index);
-        index += 1;
-        return html;
-      }).join("");
-      const count = rows.reduce((sum, entry) => sum + (entry.group ? entry.group.length : 1), 0);
-      return `<section class="job-todo-section ${escapeHtml(severity)}"${start >= SHOWN ? " data-todo-extra hidden" : ""}>
-        <h3>${escapeHtml(SECTION_TITLE[severity] || "Worth a check")} <span>${count}</span></h3>
-        <ol>${items}</ol>
-      </section>`;
-    })
-    .join("");
-  const more = index - SHOWN;
+  todos.forEach((todo) => {
+    if (questions.includes(todo)) return;
+    // A room already asked about isn't listed again as "not in the total" (it was both, and contradicted itself).
+    if (todo.kind === "room_not_counted") {
+      if (!asked.has(todo.room?.room_id)) waiting.push(todo);
+      return;
+    }
+    elsewhere.push(todo);
+  });
+  // Still being worked out: one line per reason, rooms as links.
+  const reasons = new Map();
+  waiting.forEach((todo) => {
+    const reason = groupReason(todo.detail);
+    if (!reasons.has(reason)) reasons.set(reason, []);
+    reasons.get(reason).push(todo);
+  });
+  const waitingHtml = reasons.size
+    ? `<section class="job-todo-section waiting"><h3>Not in the total yet</h3><ul class="job-todo-lines">${[...reasons]
+        .map(([reason, rows]) => `<li>${rows.length} room${rows.length === 1 ? "" : "s"}: ${escapeHtml(reason)} — ${rows
+          .map((todo) => `<a data-todo="${escapeHtml(todo.id)}" href="#/job/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(todo.room?.room_id || "")}">${escapeHtml(todo.room?.name || todo.title)}</a>`).join(", ")}</li>`)
+        .join("")}</ul></section>`
+    : "";
+  const elsewhereHtml = elsewhere.length
+    ? `<section class="job-todo-section elsewhere"><h3>Also worth a look</h3><ul class="job-todo-lines">${elsewhere
+        .map((todo) => {
+          const link = (todo.actions || []).find((action) => action.type === "link");
+          const again = (todo.actions || []).find((action) => action.type === "retry");
+          const step = link ? link.step || todo.step || "drawings" : "";
+          return `<li data-todo="${escapeHtml(todo.id)}" data-todo-kind="${escapeHtml(todo.kind || "")}"><span>${escapeHtml(todo.title || "")}</span>${
+            link ? ` <a href="#/job/${encodeURIComponent(projectId)}/${encodeURIComponent(step)}">${escapeHtml(link.label || "Open")}</a>` : ""}${
+            again ? ` ${actionButton(again, todo)}` : ""}<p class="job-todo-message" data-todo-message role="status"></p></li>`;
+        })
+        .join("")}</ul></section>`
+    : "";
+  const form = questions.length
+    ? `<form class="job-todo-form" data-todo-form novalidate>
+        <ol class="job-todo-questions">${questions.map((todo) => questionItem(todo, summary.uses)).join("")}</ol>
+        <div class="job-todo-submit">
+          <button type="submit" class="job-button" data-todo-save>Save all and update the load</button>
+          <p class="job-todo-message" data-todo-form-message role="status"></p>
+        </div>
+      </form>`
+    : "";
   return `<div class="job-todos" id="job-todo-list" data-todo-list hidden>
-    <h2>Things to check</h2>
-    ${sections}
-    ${more > 0 ? `<button type="button" class="job-button secondary" data-todo-more>Show ${more} more</button>` : ""}
+    <h2>Things to check${questions.length ? ` <span class="job-todo-count">${questions.length} to answer</span>` : ""}</h2>
+    ${form}${waitingHtml}${elsewhereHtml}
   </div>`;
 }
 
@@ -328,6 +334,64 @@ async function act(button, summary, projectId, host) {
   }
 }
 
+// Saves every answer in the form, then recalculates once (the server's "update the load" action says which phase).
+async function saveAll(form, summary, projectId, host) {
+  const message = form.querySelector("[data-todo-form-message]");
+  const rooms = [];
+  const joins = [];
+  const skipped = [];
+  (summary.todos || []).forEach((todo) => {
+    const item = form.querySelector(`[data-todo="${CSS.escape(todo.id)}"]`);
+    if (!item) return;
+    const roomId = todo.room?.room_id;
+    const choice = item.querySelector("input[type=radio]:checked")?.value;
+    const actions = todo.actions || [];
+    if (choice === "area") {
+      const value = Number(item.querySelector('[data-input="area"]')?.value);
+      if (Number.isFinite(value) && value > 0) rooms.push({ room_id: roomId, area_m2: value });
+      else skipped.push(todo.room?.name || todo.title);
+    } else if (choice === "cooled") {
+      const action = actions.find((row) => row.type === "cooled");
+      rooms.push({ room_id: roomId, cooled: action?.value === true || action?.value === "true" });
+    } else if (choice === "join") {
+      const action = actions.find((row) => row.type === "join");
+      joins.push({ action: "join", room_ids: action?.room_ids || [], name: action?.name });
+    }
+    const use = item.querySelector('[data-input="use"]')?.value;
+    if (use) rooms.push({ room_id: roomId, use });
+    const name = item.querySelector('[data-input="name"]')?.value.trim();
+    if (name) rooms.push({ room_id: roomId, name });
+  });
+  if (!rooms.length && !joins.length) {
+    message.textContent = skipped.length ? `Type the area of ${skipped.join(", ")} first.` : "Nothing to save: every answer is left as it is.";
+    return;
+  }
+  form.querySelectorAll("button, input, select").forEach((control) => (control.disabled = true));
+  try {
+    const applied = [];
+    if (rooms.length) {
+      const saved = await sendJson("/api/quick-fix", { project_id: projectId, rooms, reviewer: "To-do list" });
+      applied.push(...(saved.applied || []));
+    }
+    for (const join of joins) {
+      const saved = await sendJson("/api/room-join", { project_id: projectId, ...join, reviewer: "To-do list" });
+      applied.push(...(saved.applied || []));
+    }
+    const fresh = await getJson(`/api/job-summary${query(projectId)}`).catch(() => ({}));
+    const recalc = (fresh.todos || []).find((todo) => todo.kind === "update_load")?.actions?.find((action) => action.type === "recalculate");
+    if (recalc) {
+      await runCalculation(projectId, recalc.phase || "full", message);
+      message.textContent = "Saved and updated.";
+    }
+    flash = { projectId, text: `Saved. ${applied.join(" ")}${recalc ? " The load is up to date." : ""}${skipped.length ? ` Still needs an area: ${skipped.join(", ")}.` : ""}`.trim() };
+    refreshPage();
+  } catch (error) {
+    message.textContent = error.message;
+    message.setAttribute("role", "alert");
+    form.querySelectorAll("button, input, select").forEach((control) => (control.disabled = false));
+  }
+}
+
 function bind(host, summary, projectId) {
   const list = host.querySelector("[data-todo-list]");
   const toggle = host.querySelector("[data-todo-toggle]");
@@ -344,10 +408,18 @@ function bind(host, summary, projectId) {
     setOpen(open);
     storageSet(key, open ? "1" : "0");
   });
-  host.querySelector("[data-todo-more]")?.addEventListener("click", (event) => {
-    host.querySelectorAll("[data-todo-extra]").forEach((row) => (row.hidden = false));
-    event.currentTarget.remove();
+  const form = host.querySelector("[data-todo-form]");
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveAll(form, summary, projectId, host);
   });
+  // Typing an area picks "Type its area".
+  form?.querySelectorAll('[data-input="area"]').forEach((input) =>
+    input.addEventListener("input", () => {
+      const choice = input.closest(".job-choice")?.querySelector("input[type=radio]");
+      if (choice) choice.checked = true;
+    }),
+  );
   host.querySelectorAll(".job-todo-act").forEach((button) =>
     button.addEventListener("click", () => act(button, summary, projectId, host)),
   );

@@ -2615,3 +2615,109 @@ body.job-preview {
     margin-top: 8px;
   }
 }
+
+/* --- 2026-11-28 things to check as one form: plain question, two options (recommended chosen), one save ------ */
+.job-todo-count {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.job-todo-questions {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.job-question {
+  display: block;
+}
+.job-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.job-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  background: var(--sheet);
+}
+.job-choice:has(input:checked) {
+  border-color: var(--action);
+  background: #eef5f9;
+}
+.job-choice input[type="radio"] {
+  margin: 0;
+  accent-color: var(--action);
+}
+.job-choice-tag {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.job-choice .job-todo-field input {
+  width: 8ch;
+}
+.job-todo-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 6px;
+}
+.job-todo-fields .job-todo-field span {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.job-todo-submit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  position: sticky;
+  bottom: 0;
+  padding: 10px 0;
+  background: var(--sheet);
+}
+.job-todo-lines {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+.job-todo-lines li + li {
+  margin-top: 6px;
+}
+.job-todo-lines .job-button {
+  min-height: 30px;
+  padding: 2px 10px;
+  font-size: 13px;
+  margin-left: 6px;
+}
+.job-todo-section.waiting h3,
+.job-todo-section.elsewhere h3 {
+  margin-top: 16px;
+}
+.job-question p {
+  margin: 0;
+}
+.job-question .job-todo-detail {
+  margin-top: 2px !important;
+}
+.job-question .job-todo-more {
+  margin-top: 6px;
+}
+.job-question .job-todo-more > summary {
+  display: inline-flex;
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 13px;
+}
