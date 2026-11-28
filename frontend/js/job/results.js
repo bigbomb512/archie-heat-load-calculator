@@ -392,6 +392,15 @@ function assumptionsList(items, projectId) {
 }
 
 
+// The assumptions behind the number, folded like the Rooms tab's: what needs doing is in the one to-do list at the
+// top (2026-11-28 compact pass).
+function assumptionsPanel(items, projectId, stale) {
+  const list = assumptionsList(items, projectId);
+  const count = (list.match(/<li>/g) || []).length;
+  if (!count) return `<section class="job-panel ${stale ? "stale" : ""}" data-still-assumed><h2>Still assumed</h2>${list}</section>`;
+  return `<section class="job-panel job-collapsible-panel ${stale ? "stale" : ""}" data-still-assumed><details><summary><h2>${count} ${count === 1 ? "assumption" : "assumptions"} in this result</h2></summary>${list}</details></section>`;
+}
+
 const YEAR_SHADES = ["#f4f8fa", "#e3eef4", "#c9dde9", "#a9c9dc", "#86b3ce", "#5f93b6"];
 
 // The load through the year (user decision 2026-10-25): the 21st of every month, all 24 hours, each with its own sun.
@@ -452,7 +461,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
       : "";
   const household = peak.household_counted_once;
   const householdLine = household
-    ? `<p>Household counted once: the rooms hold ${escapeHtml(household.people_in_rooms)} people at ${escapeHtml(peak.display_hour ?? peak.hour)}:00, the house has ${escapeHtml(household.people_counted)} — ${fmt(Number(household.removed_sensible_kw || 0) + Number(household.removed_latent_kw || 0))} kW of people heat not counted twice.</p>`
+    ? `<details class="job-room-why" data-household><summary>People counted once</summary><p>Household counted once: the rooms hold ${escapeHtml(household.people_in_rooms)} people at ${escapeHtml(peak.display_hour ?? peak.hour)}:00, the house has ${escapeHtml(household.people_counted)} — ${fmt(Number(household.removed_sensible_kw || 0) + Number(household.removed_latent_kw || 0))} kW of people heat not counted twice.</p></details>`
     : "";
   // A joined room (pieces the drawing reader split) is one row: its load is the peak of the pieces' summed hours.
   const joinedRows = (plan.joined_rooms || [])
@@ -500,7 +509,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
         ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}
         ${stale
-          ? `<p class="job-muted">Update the final load before creating the report.</p>`
+          ? ""
           : `<div class="job-report" data-report>
               <button class="job-button" type="button" data-create-report>Create the report</button>
               <button class="job-button secondary" type="button" data-create-heating-report disabled hidden aria-describedby="job-heating-report-note">Create the heating report</button>
@@ -548,7 +557,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
       <h2 id="heating-title">Design heating load</h2>
       <div data-heating-body><p class="job-muted" role="status">Loading…</p></div>
     </section>
-    <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
+    ${assumptionsPanel(assumptions, projectId, stale)}`;
 }
 
 // How far the saved load could move with the facts the drawings don't settle: every kW is a full calculation with one

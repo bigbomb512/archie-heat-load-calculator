@@ -339,13 +339,14 @@ function roomDetails(plan, room, status, uses, editor = {}) {
     : "";
   const useEditor = room.kind !== "refrigeration" && room.kind !== "not_a_room" ? useOptions(uses, room) : "";
   const useReason = room.use?.rationale ? `<p class="job-caption" data-room-use-reason>${escapeHtml(plainNote(room.use.rationale))}</p>` : "";
+  // The reason and its evidence are folded together under one toggle (2026-11-28 compact pass).
   const factors = room.use?.use_assessment?.factors || [];
-  const useFactors = factors.length ? `<details><summary>Why this use was selected</summary><ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul></details>` : "";
+  const useFactors = useReason || factors.length ? `<details class="job-room-why"><summary>Why this use was selected</summary>${useReason}${factors.length ? `<ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul>` : ""}</details>` : "";
   return `<section class="job-panel job-room-detail" aria-labelledby="room-detail-title">
     <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.display_name || room.name)}</h2>
     <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Cooled room"))}</p>
-    ${useReason}${useFactors}${useEditor}
-    ${room.occupancy?.value != null ? `<p class="job-caption" data-room-occupancy><strong>Design occupants (operating loads): ${fmt(room.occupancy.value, 0)}</strong><br>${escapeHtml(plainNote(room.occupancy.rationale || "Saved occupancy; source not recorded."))}</p>` : ""}
+    ${useFactors}${useEditor}
+    ${room.occupancy?.value != null ? `<div class="job-caption" data-room-occupancy><strong>People: ${fmt(room.occupancy.value, 0)}</strong> <details class="job-room-why"><summary>Where this comes from</summary>${escapeHtml(plainNote(room.occupancy.rationale || "Saved occupancy; source not recorded."))}</details></div>` : ""}
     <dl class="job-key-facts">
       <div><dt>Floor area</dt><dd class="${areaClass(room)}" title="${escapeHtml(areaLabel)}">${escapeHtml(areaValue)}</dd></div>
       <div><dt>Ceiling height</dt><dd class="${height?.origin === "preliminary_fallback" ? "assumed" : ""}" title="${escapeHtml(height?.origin || "Height source not recorded")}">${escapeHtml(heightValue)} <button class="job-link-button" data-edit-height>Change</button></dd></div>

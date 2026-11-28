@@ -315,11 +315,16 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) => row.fallback
+  // Steps that were skipped or got no answer: one folded line; each reason is inside (2026-11-28 compact pass).
+  const skipped = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) => row.fallback
     ? `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}:</strong> ${escapeHtml(row.reason || "")}</p>`
-    : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
-    + (data?.not_answered_tasks || []).map((row) =>
-      `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong>${row.reason ? ` ${escapeHtml(row.reason)}` : ""}; the room keeps the area its other steps found.</p>`).join("") : "";
+    : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`) : [];
+  const unanswered = kind === "rooms" ? (data?.not_answered_tasks || []).map((row) =>
+      `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong>${row.reason ? ` ${escapeHtml(row.reason)}` : ""}; the room keeps the area its other steps found.</p>`) : [];
+  const skippedCount = skipped.length + unanswered.length;
+  const notNeeded = skippedCount
+    ? `<details class="job-stage-skipped" data-stage-skipped><summary>${skippedCount} step${skippedCount === 1 ? "" : "s"} skipped or not answered${unanswered.length ? "; those rooms keep the area found another way" : ""}</summary>${skipped.join("")}${unanswered.join("")}</details>`
+    : "";
   // Finished with parts it couldn't do: marked like a step that needs you, so it doesn't read as not started.
   const icon = state === "done" ? "✓" : state === "attention" || state === "unfinished" ? "!" : "";
   const flag = state === "attention" ? `<span class="job-stage-flag">Needs your action</span>`

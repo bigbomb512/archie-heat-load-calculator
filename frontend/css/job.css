@@ -2431,3 +2431,19 @@ body.job-preview {
 .job-uncounted-groups li + li {
   margin-top: 4px;
 }
+.job-stage-skipped,
+.job-room-why {
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-top: 4px;
+}
+.job-stage-skipped > summary,
+.job-room-why > summary {
+  cursor: pointer;
+  color: var(--action);
+  width: max-content;
+  max-width: 100%;
+}
+.job-room-why[open] > summary {
+  margin-bottom: 4px;
+}
