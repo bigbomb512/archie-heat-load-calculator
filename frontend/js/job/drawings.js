@@ -622,7 +622,6 @@ export async function renderDrawings(project, projectId) {
         ${stagesMarkup(data, status, plan)}
       </ol>
       <section class="job-activity" data-ai-activity aria-label="AI activity">${activityMarkup(data, projectId)}</section>
-      <p class="job-caption">The review keeps going in the background. You can close this page and come back later.</p>
     </section>
     <section class="job-panel job-found-panel" aria-labelledby="found-title">
       <h2 id="found-title">Found so far</h2>

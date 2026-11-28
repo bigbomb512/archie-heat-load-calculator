@@ -1030,9 +1030,9 @@ test("Operating loads show room inputs and sources without blocking typical valu
   ).toBeVisible();
   await expect(page.getByText("People", { exact: true })).toBeVisible();
   await expect(page.getByText("Typical value", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("No required operating-load answers are waiting."),
-  ).toBeVisible();
+  // No questions waiting: the column is just the equipment (2026-11-28 compact pass; it used to say so in a sentence).
+  await expect(page.getByRole("heading", { name: "Equipment", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Questions/ })).toHaveCount(0);
 });
 
 test("an equipment card shows its schedule code, the printed quantity and how plan labels were tied to it", async ({

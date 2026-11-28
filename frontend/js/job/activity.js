@@ -70,10 +70,11 @@ export function activityMarkup(data, projectId = "") {
   const skillsSummary = `AI checks: ${completed} of ${skills.length} finished`
     + (outOfDate ? ` · ${outOfDate === completed ? "earlier answers" : `${outOfDate} earlier ${outOfDate === 1 ? "answer" : "answers"}`} kept, out of date` : "");
   const recent = data.supervisor?.recent_activity || [];
+  // 2026-11-28 compact pass: nothing running shows no list, and the "close this page" note only while work runs.
   return `<h3>AI activity</h3>
-    <p class="job-caption">Actual workflow tasks and saved answers. Updates every five seconds.</p>
     ${data.refreshProblem ? '<p class="job-note" role="status">Refresh unavailable. Showing the last confirmed activity.</p>' : ""}
-    <ul class="job-activity-list" aria-label="Current AI activity">${active.join("") || '<li class="job-caption">No active tasks reported. See the progress steps for completion or blockers.</li>'}</ul>
+    ${active.length ? `<ul class="job-activity-list" aria-label="Current AI activity">${active.join("")}</ul>
+    <p class="job-caption">It keeps going if you close this page.</p>` : ""}
     ${skills.length ? `<details data-activity-details="skills" ${open.has("skills") ? "open" : ""}><summary>${escapeHtml(skillsSummary)}</summary>
       <ul class="job-activity-list">${skills.map((row) => skillRow(row, running(data.envelope), skills)).join("")}</ul></details>` : ""}
     ${recent.length ? `<details data-activity-details="recent" ${open.has("recent") ? "open" : ""}><summary>Latest AI answers</summary>

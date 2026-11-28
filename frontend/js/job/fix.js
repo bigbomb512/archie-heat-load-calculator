@@ -11,7 +11,7 @@ function number(value, digits = 1) {
     : String(Number(Number(value).toFixed(digits)));
 }
 
-function roomRow(room, uses) {
+function roomRow(room, uses, shared = "") {
   const id = escapeHtml(room.room_id);
   const renamed = room.name !== room.label;
   const useOptions = Object.entries(uses)
@@ -23,14 +23,14 @@ function roomRow(room, uses) {
     .join("");
   const cooled = room.can_cool
     ? `<input type="checkbox" data-field="cooled" ${room.cooled ? "checked" : ""} aria-label="${escapeHtml(room.name)} is cooled">`
-    : `<span class="job-muted" title="Change its use to cool it">Not by its use</span>`;
+    : `<span class="job-muted" title="Not cooled because of its use; change its use to cool it">—</span>`;
   return `<tr data-room="${id}">
     <th scope="row"><input class="job-fix-name" data-field="name" value="${escapeHtml(room.name)}" maxlength="80" aria-label="Name of ${escapeHtml(room.label)}">
       ${renamed ? `<small class="job-row-source">On the drawings: ${escapeHtml(room.label)}</small>` : ""}
       ${room.level ? `<small class="job-row-source">${escapeHtml(room.level)}</small>` : ""}</th>
     <td><select data-field="use" aria-label="Use of ${escapeHtml(room.name)}"><option value="">${room.use_id ? "" : "Choose a use"}</option>${useOptions}</select></td>
     <td><input class="job-fix-number" data-field="area_m2" type="number" min="0.5" max="20000" step="0.1" inputmode="decimal" value="${number(room.area_m2)}" aria-label="Area of ${escapeHtml(room.name)} in m²">
-      ${room.area_label ? `<small class="job-row-source">${escapeHtml(room.area_label)}</small>` : ""}</td>
+      ${room.area_label && room.area_label !== shared ? `<small class="job-row-source">${escapeHtml(room.area_label)}</small>` : ""}</td>
     <td><input class="job-fix-number" data-field="people" type="number" min="0" max="5000" step="1" inputmode="numeric" value="${number(room.people, 0)}" placeholder="—" aria-label="People in ${escapeHtml(room.name)}"></td>
     <td class="job-fix-check">${cooled}</td>
   </tr>`;
@@ -88,7 +88,12 @@ function windowRow(target, label, summary, fix, data) {
 }
 
 function content(data, projectId) {
-  const rooms = data.rooms.map((room) => roomRow(room, data.uses)).join("");
+  // An area source shared by every room is said once under the table (2026-11-28 compact pass).
+  const labels = data.rooms.map((room) => room.area_label || "").filter(Boolean);
+  const labelCounts = labels.reduce((map, label) => map.set(label, (map.get(label) || 0) + 1), new Map());
+  const [shared = "", sharedCount = 0] = [...labelCounts].sort((a, b) => b[1] - a[1])[0] || [];
+  const sharedLabel = sharedCount > 1 ? shared : "";
+  const rooms = data.rooms.map((room) => roomRow(room, data.uses, sharedLabel)).join("");
   const windowRooms = data.rooms.filter((room) => room.windows.count > 0);
   const windows = [
     windowRow("*", "Every window", null, data.every_window || {}, data),
@@ -96,8 +101,7 @@ function content(data, projectId) {
   ].join("");
   return `<section class="job-panel" aria-labelledby="fix-title">
       <h1 id="fix-title">Fix rooms and windows</h1>
-      <p>Correct what the drawings got wrong. Nothing is read again: saving updates the load in a few seconds.
-      Renaming a room changes the name shown here and in the report; set its use and people in their own columns.</p>
+      <p class="job-caption">Saving updates the load in a few seconds; the drawings aren't read again.</p>
     </section>
     <form id="job-fix-form" novalidate>
       <section class="job-panel" aria-labelledby="fix-rooms-title">
@@ -105,7 +109,7 @@ function content(data, projectId) {
         <div class="job-table-wrap"><table class="job-fix-table">
           <thead><tr><th scope="col">Room</th><th scope="col">Use</th><th scope="col">Area m²</th><th scope="col">People</th><th scope="col">Cooled</th></tr></thead>
           <tbody>${rooms || `<tr><td colspan="5">No rooms yet.</td></tr>`}</tbody>
-        </table></div>
+        </table></div>${sharedLabel ? `<p class="job-caption" data-shared-area-source>Areas not marked otherwise: ${escapeHtml(sharedLabel)}. — under Cooled: not cooled because of its use.</p>` : ""}
       </section>
       <section class="job-panel" aria-labelledby="fix-windows-title">
         <h2 id="fix-windows-title">Windows</h2>
@@ -201,7 +205,7 @@ export async function renderFix(projectId) {
   const data = await getJson(`/api/quick-fix${query(projectId)}`);
   return {
     status: data.status,
-    statusLine: "Fix a room or its windows, then save: the drawings aren't read again.",
+    statusLine: "",
     content: content(data, projectId),
     bind: () => {
       const form = document.querySelector("#job-fix-form");

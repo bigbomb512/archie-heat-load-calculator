@@ -9,7 +9,7 @@ function isNumber(value) {
 }
 
 function formatKw(value) {
-  return isNumber(value) ? `${fmt(value)} kW` : "Not calculated yet";
+  return isNumber(value) ? `${fmt(value)} kW` : "—";
 }
 
 function sourceLabel(row) {
@@ -26,11 +26,11 @@ function sourceLabel(row) {
       generic_value: "Generic value",
       typical_home_value: "Typical home value",
       household_rule: "Household rule",
-      unresolved: "Not resolved",
+      unresolved: "—",
       edited: "Entered by you",
     }[row?.origin] ||
     row?.source ||
-    "Not resolved"
+    "—"
   );
 }
 
@@ -47,18 +47,18 @@ function inputRows(model, room) {
   ].filter(Boolean);
   const peopleText =
     people?.value == null
-      ? "Not resolved"
+      ? "—"
       : `${fmt(people.value, 0)} ${people.unit || "people"}${peopleDetail.length ? `; ${peopleDetail.join(", ")}` : ""}`;
   const lights = data.lights?.load;
   const lightText =
     lights?.value == null
-      ? "Not resolved"
+      ? "—"
       : `${fmt(lights.value)} ${lights.unit || "W"}${data.lights?.type ? `; ${String(data.lights.type).replaceAll("_", " ")}` : ""}`;
   const airRows = (data.air || []).map((item) => [
     item.label ||
       String(item.air_path_type || "Fresh air").replaceAll("_", " "),
     item.value == null
-      ? "Not resolved"
+      ? "—"
       : `${fmt(item.value)} ${item.unit || ""}`.trim(),
     sourceLabel(item),
     item.rationale || item.source || item.status,
@@ -73,8 +73,8 @@ function inputRows(model, room) {
         : [
             [
               "Fresh air and infiltration",
-              "Not resolved",
-              "Not resolved",
+              "—",
+              "—",
               "No room-specific airflow value was found.",
             ],
           ]),
@@ -88,7 +88,7 @@ function roomCard(room, plan, model) {
   const adds =
     isNumber(room.final_kw) && isNumber(room.phase1_kw)
       ? `${fmt(room.final_kw - room.phase1_kw)} kW`
-      : "Not calculated yet";
+      : "—";
   const roomTotal = formatKw(room.final_kw);
   const operating = rows
     .map(
@@ -105,12 +105,12 @@ function roomCard(room, plan, model) {
       }))
     : data.equipment || [];
   const equipment = roomEquipment.length
-    ? `<ul class="job-equipment-list">${roomEquipment
-        .map((item) => equipmentItem(item, false))
+    ? `<h3>Equipment</h3><ul class="job-equipment-names">${roomEquipment
+        .map((item) => equipmentName(item))
         .join("")}</ul>`
-    : `<p class="job-muted">Equipment will appear here when it is found in the drawings.</p>`;
+    : "";
   return `<details class="job-operating-room" ${room.room_id === plan.rooms?.find((item) => item.kind !== "refrigeration")?.room_id ? "open" : ""}>
-    <summary><b>${escapeHtml(room.name)}</b><span>${room.area_m2 == null ? "Area not available" : `${fmt(room.area_m2)} m²`}</span><span>Building ${escapeHtml(phase1)}</span><span>People and equipment add ${escapeHtml(adds)}</span></summary>
+    <summary><b>${escapeHtml(room.name)}</b><span>${room.area_m2 == null ? "Area not available" : `${fmt(room.area_m2)} m²`}</span><span>Building ${escapeHtml(phase1)}</span><span>Adds ${escapeHtml(adds)}</span></summary>
     <div class="job-operating-detail">
       <h2>${escapeHtml(room.name)}</h2>
       <p class="job-room-use">${escapeHtml(roomUse(room))}</p>
@@ -124,10 +124,17 @@ function roomCard(room, plan, model) {
         <thead><tr><th scope="col">Load</th><th scope="col">Value</th><th scope="col">Where it came from</th></tr></thead>
         <tbody>${operating}</tbody>
       </table></div>
-      <h3>Equipment</h3>${equipment}
-      <p class="job-caption">Each item says where its value came from: data sheet, matched model, typical or generic value. Items with no value or no room aren't counted; the room keeps its typical equipment allowance.</p>
+      ${equipment}
     </div>
   </details>`;
+}
+
+// One line per item in a room's card: its name, quantity and where its value came from.
+function equipmentName(item) {
+  const resolution = item.catalogue_resolution || {};
+  const value = item.decided_value || item.value || {};
+  const name = `${value.code ? `${value.code} ` : ""}${value.name || item.label || resolution.name || "Equipment"}`;
+  return `<li data-equipment-status="${escapeHtml(resolution.status || "no_value")}"><strong>${escapeHtml(name)}${value.quantity > 1 ? ` × ${escapeHtml(value.quantity)}` : ""}</strong> · ${escapeHtml(resolution.label || "No value yet")}</li>`;
 }
 
 function roomUse(room) {
@@ -227,9 +234,7 @@ function unresolvedNeeds(workflow) {
 }
 
 function needsMarkup(needs) {
-  if (!needs.length) {
-    return `<p>No required operating-load answers are waiting. Typical values remain visible with their source.</p>`;
-  }
+  if (!needs.length) return "";
   return needs
     .map(
       (
@@ -286,20 +291,20 @@ export async function renderOperating(projectId) {
       <div class="job-operating-list">${rooms.map((room) => roomCard(room, plan, model)).join("")}</div>
     </section>
     <section class="job-panel job-operating-needs" aria-labelledby="operating-needs-title">
-      <h2 id="operating-needs-title">Operating-load questions <span>(${needs.length})</span></h2>
-      ${needsMarkup(needs)}
-      <h3>Equipment found in the drawings</h3>
+      ${needs.length ? `<h2 id="operating-needs-title">Questions <span>(${needs.length})</span></h2>${needsMarkup(needs)}<h3>Equipment</h3>` : `<h2 id="operating-needs-title">Equipment</h2>`}
       ${coverageMessage ? `<p role="status" data-equipment-coverage>${escapeHtml(coverageMessage)}</p>` : ""}
       ${catalogueWarnings ? `<details><summary>Catalogue entries needing correction</summary><p>${escapeHtml(catalogueWarnings)}</p></details>` : ""}
       ${coverage?.assessment_error ? `<p>${escapeHtml(coverage.assessment_error)}</p>` : ""}
       ${equipmentMarkup}
+      <details class="job-room-why"><summary>Where the values come from</summary>Each item says where its value came from: data sheet, matched model, typical or generic value. Items with no value or no room aren't counted; the room keeps its typical equipment allowance.</details>
       ${status.results_ready && status.result_stale ? `<button class="job-button" id="job-update-equipment-result">Update final load</button><p>The saved report is retained until you recalculate.</p>` : ""}
       <p class="job-note" id="job-full-calculation" role="status"></p>
     </section>
   </div>`;
   return {
     status,
-    statusLine: coverageMessage || calculationStatus(calculation, status, needs, projectId),
+    // The equipment count is in the Equipment column; the status line says only where the load stands.
+    statusLine: calculationStatus(calculation, status, needs, projectId),
     content,
     bind: () => {
       const calculationRunning = ["queued", "running"].includes(

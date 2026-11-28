@@ -41,7 +41,7 @@ function roomsTable(input) {
         <td>${room.people ?? "—"}</td></tr>`,
       )
       .join("")}</tbody></table></div>
-    <p class="job-caption">Size each room's outlet or zone from its own peak. Size the central unit from the house's peak, not the sum of the rooms' own peaks: rooms peak at different times.</p>`;
+    <p class="job-caption">Outlets from each room's own peak; the central unit from the house's peak (rooms peak at different times).</p>`;
 }
 
 // Extension point for the AC system design (ducts, zones, outlets, unit selection). It receives the same JSON that
@@ -66,6 +66,20 @@ function download(input) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+// One line per reason; a reason with one room keeps "Room · Level: reason" (2026-11-28 compact pass).
+function notCountedGroups(rooms) {
+  const groups = new Map();
+  rooms.forEach((room) => {
+    const reason = String(room.reason || "");
+    if (!groups.has(reason)) groups.set(reason, []);
+    groups.get(reason).push(room);
+  });
+  const name = (room) => `<strong>${escapeHtml(room.name)}</strong>${room.level ? ` · ${escapeHtml(room.level)}` : ""}`;
+  return [...groups].map(([reason, list]) => list.length === 1
+    ? `<li>${name(list[0])}: ${escapeHtml(reason)}</li>`
+    : `<li>${escapeHtml(reason.replace(/^Its\s+/i, "").replace(/\.$/, "").replace(/^./, (c) => c.toUpperCase()))} (${list.length}): ${list.map(name).join(", ")}</li>`).join("");
 }
 
 export async function renderSystem(projectId) {
@@ -94,16 +108,16 @@ export async function renderSystem(projectId) {
     </section>
     ${designPanel(input)}
     <section class="job-panel"><h2>Each cooled room</h2>${roomsTable(input)}</section>
-    ${(input.not_counted || []).length ? `<section class="job-panel" data-system-not-counted><h2>Meant to be cooled, not in the load yet</h2><ul>${input.not_counted.map((room) => `<li><strong>${escapeHtml(room.name)}</strong>${room.level ? ` · ${escapeHtml(room.level)}` : ""}: ${escapeHtml(room.reason || "")}</li>`).join("")}</ul><p><a href="#/job/${encodeURIComponent(projectId)}/house">Check the house</a></p></section>` : ""}
+    ${(input.not_counted || []).length ? `<section class="job-panel" data-system-not-counted><h2>Meant to be cooled, not in the load yet</h2><ul>${notCountedGroups(input.not_counted)}</ul><p><a href="#/job/${encodeURIComponent(projectId)}/house">Check the house</a></p></section>` : ""}
     ${(input.not_cooled || []).length ? `<section class="job-panel" data-system-not-cooled><h2>Not cooled</h2><p>${(input.not_cooled || []).map((room) => escapeHtml(room.name)).join(", ")}</p></section>` : ""}
     ${(input.assumptions || []).length ? `<details class="job-panel job-more"><summary>Assumed in these loads (${input.assumptions.length})</summary><ul>${input.assumptions.map((row) => `<li>${escapeHtml(row)}</li>`).join("")}</ul></details>` : ""}`;
   return {
     status,
     statusLine: stale
-      ? "The design needs a current load."
+      ? ""
       : open
         ? `The load is current, but ${open} ${open === 1 ? "item could change it" : "items could change it"}: check the house before relying on the design.`
-        : "The load is ready for the system design.",
+        : "",
     content,
     bind() {
       document.querySelector("[data-system-download]")?.addEventListener("click", () => download(input));
