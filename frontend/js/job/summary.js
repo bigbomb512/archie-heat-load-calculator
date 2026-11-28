@@ -211,7 +211,9 @@ async function act(button, summary, projectId, host) {
     }
     change = { room_id: roomId, name };
   }
-  const join = type === "join" ? { action: "join", room_ids: action.room_ids || [], name: action.name } : null;
+  // A robe join says the joined room keeps the bedroom's use and stays cooled (whichever piece is larger).
+  const join = type === "join" ? { action: "join", room_ids: action.room_ids || [], name: action.name,
+                                   ...(action.use ? { use: action.use } : {}), ...(typeof action.cooled === "boolean" ? { cooled: action.cooled } : {}) } : null;
   host.querySelectorAll(".job-todo-act").forEach((control) => (control.disabled = true));
   try {
     if (change) {

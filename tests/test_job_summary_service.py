@@ -163,5 +163,53 @@ class GlassItemTests(unittest.TestCase):
         self.assertIn("2 (7.0 m²): it is taller than its room's ceiling", item["detail"])
         self.assertIn("61.1 m² of glass is in the load", item["detail"])
 
+
+class RobeJoinTests(unittest.TestCase):
+    """A robe sharing a wall with exactly one bedroom is offered as a join into it (house research, 2026-11-28)."""
+
+    @staticmethod
+    def square(x, y, w, h):
+        return [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]]
+
+    def plan(self, robe_at):
+        bedroom = {"taxonomy_id": "house_bedroom"}
+        rooms = [{"room_id": "bed4", "name": "Bedroom 4", "level": "First Floor", "kind": "comfort", "area_m2": 16, "use": bedroom},
+                 {"room_id": "bed3", "name": "Bedroom 3", "level": "First Floor", "kind": "comfort", "area_m2": 16, "use": bedroom},
+                 {"room_id": "wir1", "name": "Walk in robe (1)", "level": "First Floor", "kind": "not_cooled", "area_m2": 3}]
+        outlines = [{"room_id": "bed4", "page": 9, "points": self.square(0, 0, 400, 400)},
+                    {"room_id": "bed3", "page": 9, "points": self.square(1000, 0, 400, 400)},
+                    {"room_id": "wir1", "page": 9, "points": self.square(*robe_at, 150, 200)}]
+        return {"outlines": outlines}, rooms
+
+    def test_a_robe_beside_one_bedroom_is_offered_as_a_join(self):
+        plan, rooms = self.plan((410, 0))            # a 10 px wall between the robe and Bedroom 4
+        [item] = service._robe_items(plan, rooms)
+        self.assertEqual(item["title"], "Walk in robe (1) opens off Bedroom 4")
+        join = item["actions"][0]
+        self.assertEqual((join["type"], join["room_ids"], join["name"]), ("join", ["bed4", "wir1"], "Bedroom 4"))
+        # The joined room keeps the bedroom's use and stays cooled, whichever piece is larger.
+        self.assertEqual((join["use"], join["cooled"]), ("house_bedroom", True))
+
+    def test_a_robe_bigger_than_its_bedroom_is_not_offered(self):
+        # Swapped names (house18: "Wir" 28.6 m² beside a 3.6 m² "Master bedroom"): joining would make the bedroom a robe.
+        plan, rooms = self.plan((410, 0))
+        rooms[2]["area_m2"] = 30
+        self.assertEqual(service._robe_items(plan, rooms), [])
+
+    def test_two_robes_off_one_bedroom_are_one_join(self):
+        plan, rooms = self.plan((410, 0))
+        rooms.append({"room_id": "wir2", "name": "Walk in robe (2)", "level": "First Floor", "kind": "not_cooled", "area_m2": 3})
+        plan["outlines"].append({"room_id": "wir2", "page": 9, "points": self.square(410, 210, 150, 190)})
+        [item] = service._robe_items(plan, rooms)
+        self.assertEqual(item["title"], "Walk in robe (1) and Walk in robe (2) open off Bedroom 4")
+        self.assertEqual(item["actions"][0]["room_ids"], ["bed4", "wir1", "wir2"])
+
+    def test_a_robe_touching_no_bedroom_or_two_is_not_offered(self):
+        plan, rooms = self.plan((700, 0))            # in the middle, touching neither
+        self.assertEqual(service._robe_items(plan, rooms), [])
+        plan, rooms = self.plan((410, 0))
+        plan["outlines"][1]["points"] = self.square(570, 0, 400, 400)   # Bedroom 3 now on its other side
+        self.assertEqual(service._robe_items(plan, rooms), [])
+
 if __name__ == "__main__":
     unittest.main()

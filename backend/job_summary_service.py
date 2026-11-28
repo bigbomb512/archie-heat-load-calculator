@@ -341,6 +341,67 @@ def _other_items(drawing, supervisor, result, rooms, status):
     return items
 
 
+ROBE_NAME = re.compile(r"\b(?:robes?|wir|walk[\s-]*in(?:\s+robe)?)\b", re.I)
+BEDROOM_NAME = re.compile(r"\b(?:bed(?:room)?s?|master)\b", re.I)
+
+
+def _robe_items(plan, rooms):
+    """A robe or walk-in robe that shares a wall with exactly one bedroom is part of that bedroom: its floor, walls and
+    windows count with it and it gets no outlet (house research, 2026-11-28). Asked as a join, recommended."""
+    from shapely.geometry import Polygon
+    shapes = {}
+    for outline in plan.get("outlines") or []:
+        points = outline.get("points") or []
+        if len(points) >= 3:
+            try:
+                shapes.setdefault(outline.get("room_id"), []).append((outline.get("page"), Polygon(points).buffer(0)))
+            except (TypeError, ValueError):
+                continue
+    by_bedroom = {}
+    for robe in rooms:
+        if robe.get("join_id") or not ROBE_NAME.search(str(robe.get("name") or "")) or robe.get("room_id") not in shapes:
+            continue
+        touching = []
+        for bed in rooms:
+            if (bed is robe or bed.get("join_id") or not BEDROOM_NAME.search(str(bed.get("name") or ""))
+                    or ROBE_NAME.search(str(bed.get("name") or "")) or bed.get("kind") != "comfort"
+                    or str(bed.get("level") or "").casefold() != str(robe.get("level") or "").casefold()):
+                continue
+            shared = 0.0
+            for page, robe_shape in shapes[robe["room_id"]]:
+                for bed_page, bed_shape in shapes.get(bed.get("room_id"), []):
+                    if page != bed_page or robe_shape.is_empty or bed_shape.is_empty:
+                        continue
+                    # Walls are drawn between the outlines: "sharing a wall" is the robe's outline within a wall's
+                    # thickness of the bedroom's, along at least a third of the robe's side.
+                    reach = 0.08 * math.sqrt(bed_shape.area)
+                    shared = max(shared, robe_shape.boundary.intersection(bed_shape.buffer(reach)).length
+                                 / max(1e-9, math.sqrt(robe_shape.area)))
+            if shared >= 0.33:
+                touching.append(bed)
+        if len(touching) != 1:
+            continue
+        bed = touching[0]
+        # A "robe" bigger than its "bedroom" means the names are swapped (house18: "Wir" 28.6 m², "Master bedroom"
+        # 3.6 m²); joining would make the bedroom a robe. Not offered.
+        if (_area(robe) or 0) >= (_area(bed) or float("inf")):
+            continue
+        by_bedroom.setdefault(bed["room_id"], (bed, []))[1].append(robe)
+    items = []
+    for bed, robes in by_bedroom.values():
+        names = _join([_name(robe) for robe in robes])
+        items.append(_item(f"robe:{bed['room_id']}", "robe_join", "check",
+                           f"{names} open{'s' if len(robes) == 1 else ''} off {_name(bed)}",
+                           "A robe is part of the bedroom it opens off: its floor, walls and windows count with the "
+                           "bedroom, and it gets no outlet of its own.", "rooms", robes[0],
+                           # The joined room keeps the bedroom's use and stays cooled, whichever piece is larger.
+                           actions=({"type": "join", "room_ids": [bed["room_id"], *[robe["room_id"] for robe in robes]],
+                                     "name": str(bed.get("name") or ""), "use": (bed.get("use") or {}).get("taxonomy_id") or None, "cooled": True,
+                                     "label": f"Join {'it' if len(robes) == 1 else 'them'} into {_name(bed)}"},
+                                    _link("rooms", "Check on the plan"))))
+    return items
+
+
 def _glass_items(root):
     """One item for the windows left off the load: glass is about half a house's cooling peak, so missing glass is the
     largest error a traced plan can carry (house research, 2026-11-28)."""
@@ -392,6 +453,7 @@ def get(web, project):
     todos = _room_items(rooms, field) + _other_items(drawing, supervisor, result, rooms, plan.get("status") or {})
     if project.get("review_dir"):
         todos += _glass_items(Path(project["review_dir"]))
+    todos += _robe_items(plan, rooms)
     if answer["state"] == "stale":
         phase = "full" if (plan.get("status") or {}).get("phase2_complete") else "phase1_base_room"
         todos.append(_item("stale", "update_load", "blocks", "The load is out of date",
