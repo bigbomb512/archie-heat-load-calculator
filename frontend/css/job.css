@@ -2447,3 +2447,18 @@ body.job-preview {
 .job-room-why[open] > summary {
   margin-bottom: 4px;
 }
+/* Out of date on Results: the card's badge says it; this row only holds the action, and the card's own update
+   button is hidden here so there is one. */
+.job-stale-note.job-stale-action {
+  background: transparent;
+  padding: 0;
+  justify-content: flex-end;
+}
+.job-main[data-step="results"] .job-answer [data-action="recalculate"] {
+  display: none;
+}
+.job-results-table caption {
+  caption-side: top;
+  text-align: right;
+  padding-bottom: 4px;
+}

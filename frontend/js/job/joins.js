@@ -49,7 +49,7 @@ export function joinPanel(plan) {
     .join("");
   return `<section class="job-panel job-joins" data-join-panel>
     <h2>Rooms read in pieces</h2>
-    <p class="job-caption">Join pieces that are one room: each piece keeps its walls, windows and roof, and the room gets one name, one use and its people counted once. Update the load afterwards.</p>
+    <details class="job-room-why"><summary>What joining does</summary>Each piece keeps its walls, windows and roof; the room gets one name, one use and its people counted once. Update the load afterwards.</details>
     ${candidateRows ? `<ul class="job-join-list">${candidateRows}</ul>` : ""}
     ${joinedRows ? `<h3>Joined rooms</h3><ul class="job-join-list">${joinedRows}</ul>` : ""}
     <p class="job-todo-message" data-join-message role="status"></p>

@@ -124,7 +124,7 @@ function roomState(room) {
   );
 }
 
-function roomRows(rooms, selected) {
+function roomRows(rooms, selected, shared = "") {
   return rooms
     .map((room) => {
       const selectedClass = room.room_id === selected.room_id ? "selected" : "";
@@ -133,7 +133,7 @@ function roomRows(rooms, selected) {
       const noOutline = !room.has_outline
         ? `<small class="job-row-source">No outline</small>`
         : "";
-      const source = room.area_label
+      const source = room.area_label && room.area_label !== shared
         ? `<small class="job-row-source">${escapeHtml(room.area_label)}</small>`
         : "";
       return `<tr class="${selectedClass}">
@@ -147,10 +147,13 @@ function roomRows(rooms, selected) {
 }
 
 function roomTable(rooms, selected) {
+  // 2026-11-28 compact pass: "Measured at the sheet's printed scale only" was repeated under every room.
+  const labels = rooms.map((room) => room.area_label || "").filter(Boolean);
+  const shared = labels.length > 1 && labels.every((label) => label === labels[0]) ? labels[0] : "";
   return `<div class="job-table-wrap"><table class="job-room-table">
     <thead><tr><th scope="col">Room</th><th scope="col">Area</th><th scope="col">Building load</th><th scope="col">Status</th></tr></thead>
-    <tbody>${roomRows(rooms, selected)}</tbody>
-  </table></div>`;
+    <tbody>${roomRows(rooms, selected, shared)}</tbody>
+  </table></div>${shared ? `<p class="job-caption" data-shared-area-source>Areas: ${escapeHtml(shared)}</p>` : ""}`;
 }
 
 function floorRoomLists(plan, selected, projectId) {
