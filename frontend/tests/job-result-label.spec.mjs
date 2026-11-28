@@ -54,6 +54,15 @@ test("a result kept preliminary by self-checks says what to look at", async ({ p
   await expect(why).not.toContainText("Answer the open questions");
 });
 
+test("a design result shows a load-per-m² warning without holding it at preliminary", async ({ page }) => {
+  const warning = "30 W per m² of cooled floor is outside the 39–108 W/m² of the checked houses; check that no room, wall or glass is missing or counted twice.";
+  await open(page, { status: "design", count: 0, open: [], text: "Design", reason: "No unit-changing inputs remain open.",
+                     self_checks: [], self_check_warnings: [warning] });
+  await expect(page.locator(".job-result-summary [data-result-label]")).toHaveText("Design");
+  await expect(page.locator("[data-label-why]")).toHaveCount(0);
+  await expect(page.locator("[data-self-check-warnings]")).toContainText("30 W per m² of cooled floor");
+});
+
 test("no saved cooling result shows no label badge", async ({ page }) => {
   plan.status.results_ready = false;
   plan.final_report = {};

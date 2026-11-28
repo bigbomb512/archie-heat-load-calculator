@@ -69,9 +69,17 @@ class LabelTests(unittest.TestCase):
         self.assertIn("Only 15 of the 28 windows", result["reason"])
         self.assertEqual(len(result["self_checks"]), 1)
 
+    def test_load_per_m2_outside_the_band_warns_but_leaves_design(self):
+        # The band comes from only three checked houses, so it is shown but doesn't hold a design at Preliminary.
+        result = self.call(*job(total_kw=3.0, rooms=(("living", 100, 3.0),)))
+        self.assertEqual((result["status"], result["self_checks"]), ("design", []))
+        self.assertEqual(len(result["self_check_warnings"]), 1)
+        self.assertIn("30 W per m²", result["self_check_warnings"][0])
+
     def test_passing_self_checks_leave_design(self):
         result = self.call(*job())
         self.assertEqual((result["status"], result["self_checks"]), ("design", []))
+        self.assertEqual(result["self_check_warnings"], [])
 
 
 if __name__ == "__main__":

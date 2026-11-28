@@ -498,6 +498,9 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
           (resultLabel.self_checks || []).length
             ? ` <span data-self-checks>${(resultLabel.self_checks || []).map(escapeHtml).join(" ")}</span>`
             : ""}${resultLabel.count || !(resultLabel.self_checks || []).length ? " Answer the open questions below to make it a design figure." : ""}</p>` : ""}
+        ${(resultLabel.self_check_warnings || []).length
+          ? `<p class="job-label-why" data-self-check-warnings>Check: ${(resultLabel.self_check_warnings || []).map(escapeHtml).join(" ")}</p>`
+          : ""}
         <p>${statusSentence}</p>
         ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}

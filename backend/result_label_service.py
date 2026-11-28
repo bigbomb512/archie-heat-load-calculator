@@ -38,7 +38,9 @@ def label(project, *, status=None):
         state, text = "design", "Design"
         reason = (f"{len(open_rows)} {'input is' if len(open_rows) == 1 else 'inputs are'} still assumed, but the calculated range does not change the unit."
                   if open_rows else "No unit-changing inputs remain open.")
-    problems = _self_checks(paths, report)
+    found = _self_checks(paths, report)
+    problems = [row["text"] for row in found if row["blocks"]]
+    warnings = [row["text"] for row in found if not row["blocks"]]
     if problems:
         if state == "design":
             state = "preliminary"
@@ -46,16 +48,18 @@ def label(project, *, status=None):
             reason = " ".join(problems)
         else:
             reason = f"{reason} Self-check: {' '.join(problems)}"
-    return {"status": state, "count": count, "open": open_rows, "text": text, "reason": reason, "self_checks": problems}
+    return {"status": state, "count": count, "open": open_rows, "text": text, "reason": reason, "self_checks": problems,
+            "self_check_warnings": warnings}
 
 
 def _self_checks(paths, report):
-    """A result that is plainly short (rooms not counted, windows not placed, load per m² far off) is never "Design"."""
+    """Self-check findings: rooms not counted or windows not placed keep a result from "Design"; a load per m² far off
+    is only a warning."""
     from backend import result_self_checks
     if not paths.get("base_report"):
         return []
     from backend.house_windows_service import is_dwelling
     read = assumption_range_service._read_big
     base, model = read(paths["base_report"]), (read(paths["model"]) if paths.get("model") else {})
-    return result_self_checks.checks(base if isinstance(base, dict) else {}, report,
+    return result_self_checks.findings(base if isinstance(base, dict) else {}, report,
                                      model if isinstance(model, dict) else {}, is_dwelling(paths["root"]))
