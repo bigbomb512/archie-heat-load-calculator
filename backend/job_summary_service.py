@@ -1,7 +1,9 @@
 """Read-only answer card and ranked work list for a job."""
 
+import json
 import math
 import re
+from pathlib import Path
 
 from ai.room_use_resolution import is_kitchen_only
 from backend import (calculation_service, contractor_report, drawing_tasks_service,
@@ -339,6 +341,29 @@ def _other_items(drawing, supervisor, result, rooms, status):
     return items
 
 
+def _glass_items(root):
+    """One item for the windows left off the load: glass is about half a house's cooling peak, so missing glass is the
+    largest error a traced plan can carry (house research, 2026-11-28)."""
+    from ai import house_windows
+    try:
+        saved = json.loads((root / "house_windows.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    coverage = (saved.get("glass_coverage") if isinstance(saved, dict) else None) or {}
+    causes = coverage.get("by_cause") or {}
+    count = int(coverage.get("lost_windows") or 0)
+    if not count:
+        return []
+    lost = float(coverage.get("lost_m2") or 0)
+    parts = [f"{row['windows']} ({row['m2']:.1f} m²): {house_windows.LOSS_CAUSES.get(cause, cause)}"
+             for cause, row in sorted(causes.items(), key=lambda item: -float(item[1].get("m2") or 0))]
+    title = (f"{_plural(count, 'window', 'windows')} ({lost:.1f} m² of glass) "
+             f"{'isn' if count == 1 else 'aren'}'t in the load")
+    return [_item("glass-missing", "glass_missing", "changes_number", title,
+                  "; ".join(parts) + f". {float(coverage.get('in_load_m2') or 0):.1f} m² of glass is in the load.",
+                  "rooms", actions=(_link("rooms", "Check on the plan"),))]
+
+
 def get(web, project):
     """Gather each source independently; one failed source does not hide the rest."""
     failed = []
@@ -365,6 +390,8 @@ def get(web, project):
     field = "final_kw" if _number(_peak(plan.get("final_report")).get("final_design_total_kw",
                      _peak(plan.get("final_report")).get("design_total_kw"))) is not None else "phase1_kw"
     todos = _room_items(rooms, field) + _other_items(drawing, supervisor, result, rooms, plan.get("status") or {})
+    if project.get("review_dir"):
+        todos += _glass_items(Path(project["review_dir"]))
     if answer["state"] == "stale":
         phase = "full" if (plan.get("status") or {}).get("phase2_complete") else "phase1_base_room"
         todos.append(_item("stale", "update_load", "blocks", "The load is out of date",

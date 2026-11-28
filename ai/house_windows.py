@@ -534,3 +534,62 @@ def internal_shade(description):
                else "translucent" if re.search(r"\bsunscreen\b|\bsheer\b|\btranslucent\b", text, re.I) else "")
     return {"kind": kind, **({"colour": colour} if colour else {}), **({"opacity": opacity} if opacity else {}),
             "evidence": [text[:120]]}
+
+
+# --- Glass not in the load (2026-11-28) -------------------------------------------------------------------------------
+# A window left off the load is glass the cooling peak never sees; glass is about half a house's peak (Turramurra:
+# 53%). Each such window says how much glass it carries and why it was left off, so the cause can be fixed.
+LOSS_CAUSES = {
+    "uncooled_room": "its tag is in a room that isn't cooled (a robe, ensuite or similar)",
+    "no_room": "no traced room where its tag is (a room missed or traced too small)",
+    "outline_short": "its room's outline stops short of the outside wall",
+    "double_height": "it is taller than its room's ceiling (a double-height space or void)",
+    "not_found": "its tag wasn't found on the plans",
+    "schedule": "its size can't be read from the window schedule",
+    "other": "another reason",
+}
+
+
+def window_area_m2(row):
+    """Glass area of a schedule row (width × height), m²; None when either is missing."""
+    try:
+        width, height = float(row.get("width_mm") or 0), float(row.get("height_mm") or 0)
+    except (TypeError, ValueError):
+        return None
+    return round(width * height / 1e6, 3) if width > 0 and height > 0 else None
+
+
+def loss_cause(reason, tag_room_cooled):
+    """Why a window isn't in the load: a LOSS_CAUSES key. tag_room_cooled is True/False for the traced room its tag sits
+    in, or None when the tag is in no traced room (or its position isn't known)."""
+    text = str(reason or "").casefold()
+    if "double-height" in text or "above the room's ceiling" in text:
+        return "double_height"
+    if "listed in the schedule but is not matched" in text:
+        return "not_found"
+    if "schedule" in text or "more than one size" in text:
+        return "schedule"
+    if "no outside wall" in text or "filled by other windows" in text:
+        if tag_room_cooled is False:
+            return "uncooled_room"
+        if tag_room_cooled is True:
+            return "outline_short"
+        return "no_room"
+    return "other"
+
+
+def glass_coverage(placed, lost):
+    """{"in_load_m2", "lost_m2", "by_cause": {cause: {"windows", "m2"}}} from placed openings and lost rows."""
+    in_load = 0.0
+    for row in placed:
+        try:
+            in_load += float(row.get("width_m") or 0) * max(0.0, float(row.get("head_height_m") or 0) - float(row.get("sill_height_m") or 0))
+        except (TypeError, ValueError):
+            continue
+    by_cause = {}
+    for row in lost:
+        entry = by_cause.setdefault(row["cause"], {"windows": 0, "m2": 0.0})
+        entry["windows"] += 1
+        entry["m2"] = round(entry["m2"] + float(row.get("area_m2") or 0), 2)
+    return {"in_load_m2": round(in_load, 2), "lost_m2": round(sum(v["m2"] for v in by_cause.values()), 2),
+            "lost_windows": len(lost), "by_cause": by_cause}

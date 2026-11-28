@@ -145,5 +145,23 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("11.4 m² together", split[0]["title"])
 
 
+
+class GlassItemTests(unittest.TestCase):
+    def test_windows_left_off_the_load_are_one_item_with_their_glass_and_causes(self):
+        import json, tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.assertEqual(service._glass_items(root), [])
+            (root / "house_windows.json").write_text(json.dumps({"glass_coverage": {
+                "in_load_m2": 61.08, "lost_m2": 21.32, "lost_windows": 6,
+                "by_cause": {"no_room": {"windows": 4, "m2": 14.34}, "double_height": {"windows": 2, "m2": 6.98}}}}))
+            [item] = service._glass_items(root)
+        self.assertEqual(item["title"], "6 windows (21.3 m² of glass) aren't in the load")
+        self.assertEqual(item["severity"], "changes_number")
+        self.assertTrue(item["detail"].startswith("4 (14.3 m²): no traced room where its tag is"))
+        self.assertIn("2 (7.0 m²): it is taller than its room's ceiling", item["detail"])
+        self.assertIn("61.1 m² of glass is in the load", item["detail"])
+
 if __name__ == "__main__":
     unittest.main()
