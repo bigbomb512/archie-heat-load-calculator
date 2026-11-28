@@ -2346,3 +2346,88 @@ body.job-preview {
 .job-year-hour {
   position: relative;
 }
+
+/* --- 2026-11-28 compact pass: one line per fact, the sentences behind "Why" or a hover title ------------------- */
+.job-answer {
+  padding: 10px 16px;
+  gap: 8px 20px;
+  grid-template-columns: auto 1fr auto;
+}
+.job-answer-figure {
+  gap: 0;
+}
+.job-answer-total {
+  font-size: 28px;
+}
+.job-answer-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.job-answer-badges .job-answer-facts {
+  margin-left: 4px;
+}
+.job-answer-why {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.job-answer-why > summary {
+  cursor: pointer;
+  color: var(--action);
+  width: max-content;
+}
+.job-answer-why .job-answer-note {
+  margin: 4px 0 0;
+}
+.job-step-copy b {
+  font-size: 14px;
+}
+.job-main {
+  padding-top: 20px;
+}
+/* A finished step reads as one line: its name, then its result. */
+.job-stage.done strong {
+  display: inline;
+}
+.job-stage.done > span > p {
+  display: inline;
+  margin: 0 0 0 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.job-legend {
+  gap: 14px;
+  padding-top: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.job-legend > span {
+  cursor: help;
+}
+.job-facts-more > summary {
+  cursor: pointer;
+  color: var(--action);
+  width: max-content;
+}
+.job-facts-more[open] > summary {
+  margin-bottom: 4px;
+}
+[data-weather-tag] {
+  margin-left: 6px;
+  vertical-align: 2px;
+}
+.job-room-detail .job-key-facts dd {
+  font-size: 18px;
+}
+.job-stage.done {
+  padding: 6px 0;
+}
+.job-uncounted-groups {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+.job-uncounted-groups li + li {
+  margin-top: 4px;
+}

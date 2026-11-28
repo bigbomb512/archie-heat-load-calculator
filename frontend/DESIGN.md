@@ -15,6 +15,17 @@ Use `css/design-system.css` for shared tokens and controls. The palette has one 
 
 Do not remove engineering evidence, review gates, scope labels, or infer missing engineering values to simplify the interface. Do not introduce nonfunctional navigation or imply a CAD editor exists where the product supplies calculation and evidence review.
 
+## Writing on screen (28 Nov 2026)
+
+The user found the job screens too wordy and not compact. On every screen:
+- One line per fact. Say each thing once: a status shown in the card at the top isn't repeated in a paragraph below.
+- Numbers and badges before sentences. The sentence behind a badge goes in its hover title or a "Why" toggle.
+- Hide empty sections instead of explaining that they're empty; show "—" for a value that isn't worked out yet.
+- No internal wording on screen: checker refusals, taxonomy matches, confidence bands, dated decision references
+  (`plainNote` strips these). Keep the evidence itself, folded if it's long.
+- Group repeated rows ("Walls still being worked out (16): …") instead of one row per item.
+- Finished steps take one line.
+
 ## Entry page appearance
 
 `landing.html` leads directly to Jobs and New job. `landing-workspace.css` is

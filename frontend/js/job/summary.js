@@ -60,23 +60,30 @@ function answerCard(summary, projectId) {
   const counts = summary.todos?.length || 0;
   const recalc = (summary.todos || []).find((todo) => todo.kind === "update_load");
   const recalcAction = recalc?.actions?.find((action) => action.type === "recalculate");
+  // One line: the figure, its badges and the facts. The sentences behind the badges are under "Why" (2026-11-28:
+  // the card repeated "building only" and "partial" in three places); with no figure yet, the note is the answer.
+  const headline = String(answer.headline || "Cooling load");
+  const shortHeadline = headline.replace(/\s*\([^)]*\)\s*$/, "") || headline;
+  const notes = [answer.note, answer.note && completeness.text ? completeness.text : ""].filter(Boolean);
+  const noteText = answer.note || completeness.text || "";
+  const why = hasTotal && noteText
+    ? `<details class="job-answer-why"><summary>Why</summary><p class="job-answer-note" data-answer-note>${escapeHtml(noteText)}</p>${
+        notes.length > 1 ? `<p class="job-answer-note">${escapeHtml(notes[1])}</p>` : ""}</details>`
+    : `<p class="job-answer-note" data-answer-note>${escapeHtml(noteText)}</p>`;
   return `<div class="job-answer" data-answer-state="${escapeHtml(state)}">
     <div class="job-answer-figure">
-      <span class="job-answer-label">${escapeHtml(answer.headline || "Cooling load")}</span>
+      <span class="job-answer-label"${shortHeadline !== headline ? ` title="${escapeHtml(headline)}"` : ""}>${escapeHtml(shortHeadline)}</span>
       ${figure}
-      ${hasTotal ? labelBadge(summary.result_label) : ""}
-      ${facts.length ? `<span class="job-answer-facts">${facts.join(" · ")}</span>` : ""}
     </div>
     <div class="job-answer-status">
-      <p><span class="job-answer-badge ${tone}" data-answer-badge>${escapeHtml(badge)}</span>${
+      <p class="job-answer-badges">${hasTotal ? labelBadge(summary.result_label) : ""}<span class="job-answer-badge ${tone}" data-answer-badge${noteText ? ` title="${escapeHtml(noteText)}"` : ""}>${escapeHtml(badge)}</span>${
         completeness.level === "partial"
-          ? ` <span class="job-answer-badge warn" data-completeness>Partial</span>`
+          ? `<span class="job-answer-badge warn" data-completeness${completeness.text ? ` title="${escapeHtml(completeness.text)}"` : ""}>Partial</span>`
           : completeness.level === "complete"
-            ? ` <span class="job-answer-badge ok" data-completeness>Complete</span>`
+            ? `<span class="job-answer-badge ok" data-completeness>Complete</span>`
             : ""
-      }</p>
-      <p class="job-answer-note" data-answer-note>${escapeHtml(answer.note || completeness.text || "")}</p>
-      ${answer.note && completeness.text ? `<p class="job-answer-note">${escapeHtml(completeness.text)}</p>` : ""}
+      }${facts.length ? `<span class="job-answer-facts">${facts.join(" · ")}</span>` : ""}</p>
+      ${why}
     </div>
     <div class="job-answer-actions">
       ${recalcAction ? actionButton(recalcAction, recalc, "primary") : ""}
@@ -282,9 +289,19 @@ function fillCounts(summary, projectId) {
       panel.innerHTML = "";
       return;
     }
+    // One line per reason, not one per room (2026-11-28: 16 rows read "walls and windows still being worked out").
+    const groups = new Map();
+    missing.forEach((room) => {
+      const reason = String(room.reason || "not counted yet");
+      if (!groups.has(reason)) groups.set(reason, []);
+      groups.get(reason).push(room);
+    });
+    const link = (room) => `<a href="#/job/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(room.room_id)}">${escapeHtml(room.name)}</a>`;
     panel.innerHTML = `<h2>${missing.length} of ${found} cooled ${found === 1 ? "room isn't" : "rooms aren't"} counted yet</h2>
-      <p>${escapeHtml(answer.not_counted_text || "")}. The load leaves ${missing.length === 1 ? "it" : "them"} out until then.</p>
-      <ul>${missing.map((room) => `<li><a href="#/job/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(room.room_id)}">${escapeHtml(room.name)}</a>: ${escapeHtml(room.reason)}</li>`).join("")}</ul>`;
+      <ul class="job-uncounted-groups">${[...groups].map(([reason, rooms]) =>
+        rooms.length === 1
+          ? `<li>${link(rooms[0])}: ${escapeHtml(reason)}</li>`
+          : `<li><b>${escapeHtml(reason.charAt(0).toUpperCase() + reason.slice(1))} (${rooms.length}):</b> ${rooms.map(link).join(", ")}</li>`).join("")}</ul>`;
     panel.hidden = false;
   });
 }

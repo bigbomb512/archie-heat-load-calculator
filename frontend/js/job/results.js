@@ -391,6 +391,7 @@ function assumptionsList(items, projectId) {
     : `<p>No remaining assumptions were reported.</p>`;
 }
 
+
 const YEAR_SHADES = ["#f4f8fa", "#e3eef4", "#c9dde9", "#a9c9dc", "#86b3ce", "#5f93b6"];
 
 // The load through the year (user decision 2026-10-25): the 21st of every month, all 24 hours, each with its own sun.
@@ -510,7 +511,6 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
             </div>`}
       </div>
     </section>
-    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${(() => { const count = Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0); return count === 1 ? "1 item has" : `${count} items have`; })()} no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <div class="job-columns job-results-columns">
       <section class="job-panel ${stale ? "stale" : ""}" aria-label="Load by room on the plan">
         <h2>Load per square metre</h2>
@@ -540,13 +540,13 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
     </section>`}
     <section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="setpoint-title" data-setpoint-panel>
       <h2 id="setpoint-title">Indoor setpoint comparison</h2>
-      <div data-setpoint-body><p class="job-muted" role="status">Loading the comparison… The first view after a new result calculates it, which can take a few seconds.</p></div>
+      <div data-setpoint-body><p class="job-muted" role="status">Loading…</p></div>
     </section>
     ${designDaySection(report.design_day_profile, stale)}
     ${yearSection(report.seasonal, stale)}
     <section class="job-panel" aria-labelledby="heating-title" data-heating-panel>
       <h2 id="heating-title">Design heating load</h2>
-      <div data-heating-body><p class="job-muted" role="status">Loading the heating result…</p></div>
+      <div data-heating-body><p class="job-muted" role="status">Loading…</p></div>
     </section>
     <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
 }
@@ -806,9 +806,8 @@ export async function renderResults(projectId) {
       Boolean(status.phase1_complete) &&
       Number(status.needs_you?.phase2 || 0) === 0,
   });
-  const statusLine = status.result_stale
-    ? "The final load is out of date. Update it before using the result."
-    : "The final load is current for the saved drawing and operating inputs.";
+  // The card above and the out-of-date bar already say whether the load is current (2026-11-28 compact pass).
+  const statusLine = "";
   return {
     status,
     statusLine,
