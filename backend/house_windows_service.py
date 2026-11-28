@@ -21,7 +21,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v16"  # v16: each window left off the load says its glass m² and why (2026-11-28); v15: tags printed up the page are read (set 16: 9 of 28 windows, 2026-11-28); v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
+VERSION = "house-windows-text-v17"  # v17: a window taller than its room's ceiling keeps its glass below the ceiling (2026-11-28); v16: each window left off the load says its glass m² and why (2026-11-28); v15: tags printed up the page are read (set 16: 9 of 28 windows, 2026-11-28); v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -199,11 +199,15 @@ def _explain_lost_glass(result, windows, page_tags, records, scopes):
     # A window over a void is tagged on both floor plans: too tall for the lower room, and in no room on the floor above
     # (the void isn't traced). It is one window, counted once.
     tall = {house_windows.normalized_mark(row["mark"]): row.get("page") for row in lost if row["cause"] == "double_height"}
+    tall.update({house_windows.normalized_mark(row["mark"]): row.get("page") for row in result.get("cut_at_ceiling", [])})
     for row in lost:
         mark = house_windows.normalized_mark(row["mark"])
         if row["cause"] == "no_room" and mark in tall and tall[mark] != row.get("page"):
             row["cause"] = "double_height"
             row["same_window_as_page"] = tall[mark]
+    for row in result.get("cut_at_ceiling", []):
+        lost.append({"mark": row["mark"], "page": row["page"], "reason": row["reason"], "area_m2": row["area_above_m2"],
+                     "tag_room": row.get("room"), "cause": "double_height", "partly_counted": True})
     result["glass_lost"] = lost
     result["glass_coverage"] = house_windows.glass_coverage(result["placed"], [row for row in lost if "same_window_as_page" not in row])
 
@@ -244,7 +248,7 @@ def apply(web, project, root, read_page=None):
         return saved
     result = {"schema_version": 1, "version": VERSION, "fingerprint": fingerprint, "schedule_pages": schedule_pages,
               "windows_in_schedule": 0, "skylights": [], "doors_not_counted": [], "unread_schedule_rows": [],
-              "placed": [], "assigned_without_wall": [], "unplaced": [], "walls_taken_as_outside": [],
+              "placed": [], "assigned_without_wall": [], "unplaced": [], "walls_taken_as_outside": [], "cut_at_ceiling": [],
               "invalid_traces": [{"room": row.get("room_label"), "page": row.get("page"),
                                   "level_name": row.get("level_name"), "plan_level": plan_levels.get(row.get("page")),
                                   "reason": "Room trace is assigned to a different level than its plan page."}
@@ -351,6 +355,25 @@ def apply(web, project, root, read_page=None):
                     if not isinstance(ceiling, (int, float)) or ceiling <= 0:
                         result["unplaced"].append({"mark": opening["mark"], "page": page,
                                                    "reason": "the room has no ceiling height yet"})
+                    elif (opening["head_height_m"] > ceiling / 1000 + 1e-9 and opening["sill_height_m"] < ceiling / 1000 - 0.1
+                          and float(opening.get("distance_mm") or 0) <= house_windows.NEAR_WALL_MM
+                          and not any("width trimmed" in note for note in opening.get("assumptions", []))):
+                        # Taller than the room (a void or double-height space): the glass below the ceiling is counted,
+                        # the rest is listed as glass not in the load. Which part of the room is the void isn't drawn
+                        # on the plan, so the room isn't made taller (2026-11-28). Only when its tag stands at this
+                        # wall and its full width fits: house18's 5.3 m stair window was otherwise matched to a bedroom
+                        # 2.2 m away and filled that wall, which the load model then dropped with its glass.
+                        top = ceiling / 1000
+                        result.setdefault("cut_at_ceiling", []).append({
+                            "mark": opening["mark"], "page": page, "room": trace.get("room_label"),
+                            "area_above_m2": round(opening["width_m"] * (opening["head_height_m"] - top), 3),
+                            "reason": f"head {opening['head_height_m']:.2f} m is above the room's ceiling {top:.2f} m "
+                                      "(double-height space?); the glass above the ceiling isn't counted"})
+                        kept.append({**opening, "head_height_m": top,
+                                     "assumptions": [*opening.get("assumptions", []),
+                                                     f"The window's head ({opening['head_height_m']:.2f} m) is above this room's "
+                                                     f"ceiling ({top:.2f} m), a double-height space or void: only the glass below "
+                                                     "the ceiling is counted; check the void."]})
                     elif opening["head_height_m"] > ceiling / 1000 + 1e-9:
                         result["unplaced"].append({"mark": opening["mark"], "page": page,
                             "reason": f"head {opening['head_height_m']:.2f} m is above the room's ceiling {ceiling / 1000:.2f} m (double-height space?)"})

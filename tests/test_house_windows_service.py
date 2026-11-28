@@ -275,12 +275,25 @@ class HouseWindowsServiceTests(unittest.TestCase):
             self.assertTrue(any(row.get("mark") == "W4" and row.get("page") == 10 for row in result["unplaced"]))
             self.assertFalse(any(row.get("mark") == "W4" and row.get("page") == 20 for row in result["unplaced"]))
 
-    def test_a_window_taller_than_the_room_is_listed_not_saved(self):
+    # Changed 2026-11-28 (user-approved plan): a window taller than its room (a void or double-height space) used to be
+    # left off entirely; its glass below the ceiling is now counted and the glass above is listed as not in the load.
+    def test_a_window_taller_than_the_room_keeps_its_glass_below_the_ceiling(self):
         with tempfile.TemporaryDirectory() as folder:
             result, writes = self.run_apply(job(folder), ceiling=2000)
-            new = [row["mark"] for row in writes[0]["openings"] if row.get("declaration_source") == "drawing_text"]
-            self.assertEqual(new, ["W4"])
-            self.assertTrue(any(row.get("mark") == "W6" and "above the room's ceiling" in row["reason"] for row in result["unplaced"]))
+            new = {row["mark"]: row for row in writes[0]["openings"] if row.get("declaration_source") == "drawing_text"}
+            self.assertEqual(sorted(new), ["W4", "W6"])
+            self.assertEqual(new["W6"]["head_height_m"], 2.0)
+            self.assertTrue(any("double-height space or void" in note for note in new["W6"]["assumptions"]))
+            self.assertFalse(any(row.get("mark") == "W6" for row in result["unplaced"]))
+            [cut] = result["cut_at_ceiling"]
+            self.assertEqual((cut["mark"], cut["area_above_m2"]), ("W6", 2.0))
+            above = next(row for row in result["glass_lost"] if row["mark"] == "W6")
+            self.assertEqual((above["cause"], above["area_m2"]), ("double_height", 2.0))
+
+    def test_a_window_wholly_above_the_ceiling_is_listed_not_saved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result, _writes = self.run_apply(job(folder), ceiling=1000)
+            self.assertTrue(any(row.get("mark") == "W4" and "above the room's ceiling" in row["reason"] for row in result["unplaced"]))
 
     def test_unchanged_inputs_are_not_placed_twice(self):
         with tempfile.TemporaryDirectory() as folder:
