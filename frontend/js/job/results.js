@@ -104,7 +104,7 @@ function roomRows(rooms, roomPeaks, maxLoad, stale) {
         <th scope="row"><button type="button" class="job-room-toggle" aria-expanded="false" aria-controls="${detailId}" data-room-toggle><span aria-hidden="true">+</span> ${name}</button></th>
         <td>${area}</td>
         <td>${bar(peak?.components, breakdownTotal, maxLoad, historical)}</td>
-        <td><b>${total == null ? "Not calculated yet" : `${fmt(total)} kW`}</b></td>
+        <td><b>${total == null ? "—" : `${fmt(total)} kW`}</b></td>
       </tr>
       <tr class="job-room-detail" id="${detailId}" hidden><td colspan="4">${roomProfile(room, peak, historical)}</td></tr>`;
     })
@@ -227,7 +227,7 @@ function designDaySection(day, stale) {
     .join("");
   return `<section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="design-day-title" data-design-day>
       <h2 id="design-day-title">The design day, hour by hour</h2>
-      <p>The whole house's cooling load on the ${escapeHtml(day.month || "design")} design day, stacked by where it comes from.${peakHour == null ? "" : ` Peak ${fmt(peakKw)} kW at ${hourLabel(peakHour)}.`}</p>
+      <p>${escapeHtml(day.month || "Design")} design day, by source.${peakHour == null ? "" : ` Peak ${fmt(peakKw)} kW at ${hourLabel(peakHour)}.`}</p>
       ${hourlyChartSvg({ hours, labels, peakHour, peakKw, title: `Cooling load by hour on the ${day.month || "design"} design day, stacked by load component` })}
       <ul class="job-component-legend">${labels
         .map((group) => {
@@ -235,7 +235,7 @@ function designDaySection(day, stale) {
           return `<li><i class="${style.outline ? "outline" : ""}" style="--part-color:${style.color}"></i>${escapeHtml(group.label)}</li>`;
         })
         .join("")}</ul>
-      <p class="job-caption">Below zero is heat leaving the rooms (cool hours through walls, roof and windows). Fan heat is the difference between the saved hour total and its parts.</p>
+      <details class="job-room-why"><summary>Reading the chart</summary>Below zero is heat leaving the rooms (cool hours through walls, roof and windows). Fan heat is the difference between the saved hour total and its parts.</details>
       <details class="job-more"><summary>Show the hours as a table</summary>
         <div class="job-table-wrap"><table class="job-results-table job-hour-table">
           <thead><tr><th scope="col">Hour</th>${labels.map((group) => `<th scope="col">${escapeHtml(group.label)}</th>`).join("")}<th scope="col">Total kW</th></tr></thead>
@@ -391,6 +391,16 @@ function assumptionsList(items, projectId) {
     : `<p>No remaining assumptions were reported.</p>`;
 }
 
+
+// The assumptions behind the number, folded like the Rooms tab's: what needs doing is in the one to-do list at the
+// top (2026-11-28 compact pass).
+function assumptionsPanel(items, projectId, stale) {
+  const list = assumptionsList(items, projectId);
+  const count = (list.match(/<li>/g) || []).length;
+  if (!count) return `<section class="job-panel ${stale ? "stale" : ""}" data-still-assumed><h2>Still assumed</h2>${list}</section>`;
+  return `<section class="job-panel job-collapsible-panel ${stale ? "stale" : ""}" data-still-assumed><details><summary><h2>${count} ${count === 1 ? "assumption" : "assumptions"} in this result</h2></summary>${list}</details></section>`;
+}
+
 const YEAR_SHADES = ["#f4f8fa", "#e3eef4", "#c9dde9", "#a9c9dc", "#86b3ce", "#5f93b6"];
 
 // The load through the year (user decision 2026-10-25): the 21st of every month, all 24 hours, each with its own sun.
@@ -401,7 +411,7 @@ function yearSection(seasonal, stale) {
   if (!months.length) return "";
   const top = Math.max(0.001, ...months.flatMap((row) => row.hourly_kw));
   const lead = seasonal.monthly
-    ? `Each month's 21st is calculated hour by hour with that day's sun angle and design temperature. The largest, ${fmt(seasonal.design_kw)} kW in ${escapeHtml(seasonal.design_month)} at ${hourLabel(seasonal.design_hour)}, sizes the system.`
+    ? `The 21st of each month, hour by hour. The largest, ${fmt(seasonal.design_kw)} kW in ${escapeHtml(seasonal.design_month)} at ${hourLabel(seasonal.design_hour)}, sizes the system.`
     : `Only the summer design day is calculated: no monthly temperatures are available for this location, so the other months aren't shown.`;
   const head = Array.from(
     { length: 24 },
@@ -430,7 +440,7 @@ function yearSection(seasonal, stale) {
         <tbody>${rows}</tbody>
       </table></div>
       <div class="job-load-scale"><span>Lower load</span><i><b></b><b></b><b></b><b></b><b></b></i><span>Higher load</span></div>
-      <p class="job-caption">Hours are local clock time on the 21st of each month; the outlined cell is that month's peak.</p>
+      <details class="job-room-why"><summary>Reading the chart</summary>Each month's 21st is calculated with that day's sun angle and design temperature. Hours are local clock time; the outlined cell is that month's peak.</details>
     </section>`;
 }
 
@@ -451,7 +461,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
       : "";
   const household = peak.household_counted_once;
   const householdLine = household
-    ? `<p>Household counted once: the rooms hold ${escapeHtml(household.people_in_rooms)} people at ${escapeHtml(peak.display_hour ?? peak.hour)}:00, the house has ${escapeHtml(household.people_counted)} — ${fmt(Number(household.removed_sensible_kw || 0) + Number(household.removed_latent_kw || 0))} kW of people heat not counted twice.</p>`
+    ? `<details class="job-room-why" data-household><summary>People counted once</summary><p>Household counted once: the rooms hold ${escapeHtml(household.people_in_rooms)} people at ${escapeHtml(peak.display_hour ?? peak.hour)}:00, the house has ${escapeHtml(household.people_counted)} — ${fmt(Number(household.removed_sensible_kw || 0) + Number(household.removed_latent_kw || 0))} kW of people heat not counted twice.</p></details>`
     : "";
   // A joined room (pieces the drawing reader split) is one row: its load is the peak of the pieces' summed hours.
   const joinedRows = (plan.joined_rooms || [])
@@ -482,7 +492,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
     ...historicalLoads.filter(Number.isFinite),
   );
   const outOfDate = stale
-    ? `<div class="job-stale-note" role="status"><span>Out of date.</span>${canUpdate ? `<button class="job-button secondary" id="job-update-final">Update the final load</button>` : `<a class="job-button secondary" href="#/job/${encodeURIComponent(projectId)}/rooms">Review room inputs before updating</a>`}<span id="job-update-status"></span></div>`
+    ? `<div class="job-stale-note job-stale-action" role="status"><span class="job-sr-only">Out of date.</span>${canUpdate ? `<button class="job-button secondary" id="job-update-final">Update the final load</button>` : `<a class="job-button secondary" href="#/job/${encodeURIComponent(projectId)}/rooms">Review room inputs before updating</a>`}<span id="job-update-status"></span></div>`
     : "";
   const reportUrl = gaps.report_url || gaps.html_url || gaps.markdown_url;
   const assumptions = gaps.assumptions || gaps.items || gaps.open_items || [];
@@ -499,7 +509,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
         ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}
         ${stale
-          ? `<p class="job-muted">Update the final load before creating the report.</p>`
+          ? ""
           : `<div class="job-report" data-report>
               <button class="job-button" type="button" data-create-report>Create the report</button>
               <button class="job-button secondary" type="button" data-create-heating-report disabled hidden aria-describedby="job-heating-report-note">Create the heating report</button>
@@ -510,18 +520,17 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
             </div>`}
       </div>
     </section>
-    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${(() => { const count = Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0); return count === 1 ? "1 item has" : `${count} items have`; })()} no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <div class="job-columns job-results-columns">
       <section class="job-panel ${stale ? "stale" : ""}" aria-label="Load by room on the plan">
         <h2>Load per square metre</h2>
         ${planSvg(plan, { shadeLoads: true })}
         <div class="job-load-scale"><span>Lower load</span><i><b></b><b></b><b></b><b></b><b></b></i><span>Higher load</span></div>
-        <p class="job-caption">Darker rooms need more cooling for their size.</p>
       </section>
       <section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="each-room-title">
         <h2 id="each-room-title">Each room</h2>
         ${legend()}
         <div class="job-table-wrap"><table class="job-results-table">
+          ${roomRows(rooms, peaks, maxLoad, stale).includes("<b>—</b>") ? `<caption class="job-caption">— Not calculated yet</caption>` : ""}
           <thead><tr><th scope="col">Room</th><th scope="col">m²</th><th scope="col">Where the load comes from</th><th scope="col">kW</th></tr></thead>
           <tbody>${roomRows(rooms, peaks, maxLoad, stale)}
             ${allowanceRow}
@@ -540,15 +549,15 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
     </section>`}
     <section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="setpoint-title" data-setpoint-panel>
       <h2 id="setpoint-title">Indoor setpoint comparison</h2>
-      <div data-setpoint-body><p class="job-muted" role="status">Loading the comparison… The first view after a new result calculates it, which can take a few seconds.</p></div>
+      <div data-setpoint-body><p class="job-muted" role="status">Loading…</p></div>
     </section>
     ${designDaySection(report.design_day_profile, stale)}
     ${yearSection(report.seasonal, stale)}
     <section class="job-panel" aria-labelledby="heating-title" data-heating-panel>
       <h2 id="heating-title">Design heating load</h2>
-      <div data-heating-body><p class="job-muted" role="status">Loading the heating result…</p></div>
+      <div data-heating-body><p class="job-muted" role="status">Loading…</p></div>
     </section>
-    <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
+    ${assumptionsPanel(assumptions, projectId, stale)}`;
 }
 
 // How far the saved load could move with the facts the drawings don't settle: every kW is a full calculation with one
@@ -806,9 +815,8 @@ export async function renderResults(projectId) {
       Boolean(status.phase1_complete) &&
       Number(status.needs_you?.phase2 || 0) === 0,
   });
-  const statusLine = status.result_stale
-    ? "The final load is out of date. Update it before using the result."
-    : "The final load is current for the saved drawing and operating inputs.";
+  // The card above and the out-of-date bar already say whether the load is current (2026-11-28 compact pass).
+  const statusLine = "";
   return {
     status,
     statusLine,

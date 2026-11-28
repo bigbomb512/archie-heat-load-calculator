@@ -110,55 +110,67 @@ test("an out-of-date load offers to update it from the card", async ({ page }) =
   await expect(page.locator('[data-todo="stale"]')).toHaveCount(0);
 });
 
-test("the list opens, is ordered as given, and shows four before Show more", async ({ page }) => {
+// Since 2026-11-28 (user decision) the list is one form: each question has two options with the recommended one
+// already chosen, missing details are asked in place, and one "Save all and update the load" saves every answer.
+test("the list opens as one form: questions have their recommended answer chosen, the rest are one line each", async ({ page }) => {
   await open(page);
   const list = page.locator("[data-todo-list]");
   await expect(list).toBeHidden();
   await page.locator("[data-todo-toggle]").click();
   await expect(list).toBeVisible();
   await expect(page.locator("[data-todo-toggle]")).toHaveAttribute("aria-expanded", "true");
-  await expect(list.locator("[data-todo]:visible")).toHaveCount(4);
-  await expect(list.locator("[data-todo]").first()).toContainText("Type the area of Bedroom 1");
+  const questions = list.locator("[data-todo-form] [data-todo]");
+  await expect(questions).toHaveCount(3);
+  await expect(questions.first()).toContainText("Type the area of Bedroom 1");
   await expect(list.locator('[data-todo="area:bed"] .job-todo-severity')).toHaveText("Not in the total");
+  await expect(list.locator('[data-todo="area:bed"] input[value="area"]')).toBeChecked();
   await expect(list.locator('[data-todo="outdoor:bal"] [data-todo-impact]')).toHaveText("Adds 2.3 kW to the total now");
+  await expect(list.locator('[data-todo="outdoor:bal"] input[value="cooled"]')).toBeChecked();
+  await expect(list.locator('[data-todo="outdoor:bal"]')).toContainText("recommended");
   await expect(list.locator('[data-todo="size:master"] [data-todo-impact]')).toHaveCount(0);
-  await list.locator("[data-todo-more]").click();
-  await expect(list.locator("[data-todo]:visible")).toHaveCount(6);
   await expect(list.locator('[data-todo="equipment"] a')).toHaveAttribute("href", `#/job/${projectId}/operating`);
+  await expect(list.locator("[data-todo-save]")).toHaveText("Save all and update the load");
 });
 
-test("fixes save through the quick-fix endpoint with the room's id", async ({ page }) => {
+test("Save all sends every answer in one quick-fix with each room's id, and asks for a missing area", async ({ page }) => {
   const posts = await open(page);
   await page.locator("[data-todo-toggle]").click();
-  const area = page.locator('[data-todo="area:bed"]');
-  await area.locator('[data-action="area"]').click();
-  await expect(area.locator("[data-todo-message]")).toHaveText("Type the area in m² first.");
-  await area.locator('[data-input="area"]').fill("12.5");
-  await area.locator('[data-action="area"]').click();
+  const list = page.locator("[data-todo-list]");
+  // Nothing chosen but a blank area: it asks for the area and sends nothing.
+  await list.locator('[data-todo="outdoor:bal"] input[value="keep"]').check();
+  await list.locator("[data-todo-save]").click();
+  await expect(list.locator("[data-todo-form-message]")).toHaveText("Type the area of Bedroom 1 first.");
+  expect(posts).toEqual([]);
+  await list.locator('[data-todo="outdoor:bal"] input[value="cooled"]').check();
+  await list.locator('[data-todo="area:bed"] [data-input="area"]').fill("12.5");
+  await list.locator("[data-todo-save]").click();
   await expect(page.locator("[data-summary-flash]")).toContainText("Saved.");
-  expect(posts[0]).toEqual({ url: "/api/quick-fix", body: { project_id: projectId, rooms: [{ room_id: "room-use:unassigned-level:bedroom-1", area_m2: 12.5 }], reviewer: "To-do list" } });
+  expect(posts[0]).toEqual({ url: "/api/quick-fix", body: { project_id: projectId, rooms: [
+    { room_id: "room-use:unassigned-level:bedroom-1", area_m2: 12.5 },
+    { room_id: "room-use:ground-floor:balcony", cooled: false },
+  ], reviewer: "To-do list" } });
 });
 
-test("not cooled, rename and retry send the right requests", async ({ page }) => {
+test("a new name saves with the other answers, and Try again restarts the drawing step", async ({ page }) => {
   const posts = await open(page);
   await page.locator("[data-todo-toggle]").click();
-  await page.locator('[data-todo="outdoor:bal"] [data-action="cooled"]').click();
+  const master = page.locator('[data-todo="size:master"]');
+  await master.locator("summary", { hasText: "Change its use or name" }).click();
+  await master.locator('[data-input="name"]').fill("Ensuite");
+  await page.locator('[data-todo="area:bed"] input[value="cooled"]').check();
+  await page.locator("[data-todo-save]").click();
   await expect.poll(() => posts.length).toBe(1);
-  expect(posts[0].body.rooms).toEqual([{ room_id: "room-use:ground-floor:balcony", cooled: false }]);
-  // After a save the step is drawn again with what was saved (the list stays open).
+  expect(posts[0].body.rooms).toEqual([
+    { room_id: "room-use:unassigned-level:bedroom-1", cooled: false },
+    { room_id: "room-use:ground-floor:balcony", cooled: false },
+    { room_id: "room-use:first-floor:master-bedroom", name: "Ensuite" },
+  ]);
+  // After the save the step is drawn again with what was saved (the list stays open).
   await expect(page.locator("[data-summary-flash]")).toContainText("Saved. Balcony: not cooled.");
   await expect(page.locator("[data-todo-list]")).toBeVisible();
-  const master = page.locator('[data-todo="size:master"]');
-  await master.locator("summary", { hasText: "Rename" }).click();
-  await master.locator('[data-input="name"]').fill("Ensuite");
-  await master.locator('[data-action="rename"]').click();
-  await expect.poll(() => posts.length).toBe(2);
-  expect(posts[1].body.rooms).toEqual([{ room_id: "room-use:first-floor:master-bedroom", name: "Ensuite" }]);
-  await expect(page.locator("[data-summary-flash]")).toBeVisible();
-  await expect(page.locator('[data-todo="size:master"] details[open]')).toHaveCount(0);
   await page.locator('[data-todo="tasks"] [data-action="retry"]').click();
-  await expect.poll(() => posts.length).toBe(3);
-  expect(posts[2]).toEqual({ url: "/api/drawing-tasks", body: { project_id: projectId, action: "resume" } });
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts[1]).toEqual({ url: "/api/drawing-tasks", body: { project_id: projectId, action: "resume" } });
 });
 
 test("split pieces join from the list through the join endpoint", async ({ page }) => {
@@ -175,8 +187,9 @@ test("split pieces join from the list through the join endpoint", async ({ page 
   });
   await open(page, data);
   await page.locator("[data-todo-toggle]").click();
-  await page.locator('[data-action="join"]').click();
-  await expect(page.locator("[data-summary-flash]")).toContainText("Joined. Ensuite (3 pieces) is one room.");
+  await expect(page.locator('input[value="join"]')).toBeChecked();
+  await page.locator("[data-todo-save]").click();
+  await expect(page.locator("[data-summary-flash]")).toContainText("Saved. Ensuite (3 pieces) is one room.");
   expect(posts[0]).toEqual({ project_id: projectId, action: "join", room_ids: ["e", "e1", "e2"], name: "Ensuite", reviewer: "To-do list" });
 });
 

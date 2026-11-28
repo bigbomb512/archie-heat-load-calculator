@@ -336,6 +336,9 @@ test("questions refused twice show as not answered without holding the stage", a
   await page.goto("/?preview=1#/job/job-1/drawings");
   const stage = page.locator('[data-stage="rooms"]');
   await expect(stage).toHaveClass(/done/);
+  // Folded into one line since 2026-11-28; the reason is inside.
+  await expect(stage.locator("[data-stage-skipped] summary")).toContainText("1 step skipped or not answered");
+  await stage.locator("[data-stage-skipped] summary").click();
   await expect(stage.locator("[data-task-not-answered]")).toContainText("Not answered.");
   await expect(stage.locator("[data-task-not-answered]")).toContainText("leave no floor for Bar");
   await expect(stage.locator("[data-task-not-answered]")).toContainText("keeps the area its other steps found");
@@ -362,6 +365,8 @@ test("withdrawn tenancy questions show as not needed without a retry", async ({ 
   await expect(stage.getByRole("button")).toHaveCount(0);
   await page.screenshot({ path: "test-results/tenancy-not-needed-desktop.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  // Folded into one line since 2026-11-28; opening it shows the reason.
+  await stage.locator("[data-stage-skipped] summary").click();
   await expect(stage.locator("[data-task-not-needed]")).toBeVisible();
   await page.screenshot({ path: "test-results/tenancy-not-needed-mobile.png", fullPage: true });
   expect(errors).toEqual([]);
@@ -1025,9 +1030,9 @@ test("Operating loads show room inputs and sources without blocking typical valu
   ).toBeVisible();
   await expect(page.getByText("People", { exact: true })).toBeVisible();
   await expect(page.getByText("Typical value", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("No required operating-load answers are waiting."),
-  ).toBeVisible();
+  // No questions waiting: the column is just the equipment (2026-11-28 compact pass; it used to say so in a sentence).
+  await expect(page.getByRole("heading", { name: "Equipment", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Questions/ })).toHaveCount(0);
 });
 
 test("an equipment card shows its schedule code, the printed quantity and how plan labels were tied to it", async ({
@@ -1135,6 +1140,8 @@ test("current Results show the total, room bars and assumptions", async ({
     "aria-label",
     /People/,
   );
+  // Folded since 2026-11-28, like the Rooms tab's assumptions.
+  await page.locator("[data-still-assumed] summary").click();
   await expect(page.getByText("Window shading is not resolved")).toBeVisible();
   // A project policy that sets an allowance is still shown.
   await expect(page.getByText("Safety allowance, 10%")).toBeVisible();
@@ -1158,6 +1165,8 @@ test("Results show household counted once only for a house report", async ({ pag
     rooms: [{ ...plan.rooms[0], state: "done", phase1_kw: 2.5, final_kw: 4.2, final_w_m2: 84 }],
   });
   await page.goto("/?preview=1#/job/job-1/results");
+  // Folded since 2026-11-28.
+  await page.locator("[data-household] summary").click();
   await expect(page.getByText("Household counted once: the rooms hold 6 people at 19:00, the house has 3 — 0.5 kW of people heat not counted twice.")).toBeVisible();
 
   const shopReport = structuredClone(finalReport);
@@ -1838,9 +1847,10 @@ test("room use explains conflicting evidence and can be corrected without renami
   await page.route("**/api/job-calculation**", route => route.fulfill({ json: { status: "done" } }));
   await page.goto(`/?preview=1#/job/job-1/rooms/${room.room_id}`);
   await expect(page.locator(".job-room-title")).toHaveText("Dining");
-  await expect(page.locator("[data-room-use-reason]")).toContainText("cooking line and dishwasher");
   await expect(page.locator("[data-room-use]")).toHaveValue("kitchen");
+  // The reason is folded with its evidence since 2026-11-28.
   await page.getByText("Why this use was selected").click();
+  await expect(page.locator("[data-room-use-reason]")).toContainText("cooking line and dishwasher");
   await expect(page.getByText("Cooking line and dishwasher inside this outline")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/room-use-evidence.png", fullPage: true });
@@ -1860,8 +1870,11 @@ test("room occupants show the seating source and fallback rationale", async ({ p
     rationale: "140 seats from the seating schedule on page 19. Printed total takes precedence over 72 counted seats." } };
   await preview(page, { rooms: [room] });
   await page.goto(`/?preview=1#/job/job-1/rooms/${room.room_id}`);
-  await expect(page.locator("[data-room-occupancy]")).toContainText("Design occupants (operating loads): 140");
+  // Shortened and folded since 2026-11-28: the number shows, the source is one click away.
+  await expect(page.locator("[data-room-occupancy]")).toContainText("People: 140");
+  await page.locator("[data-room-occupancy] summary").click();
   await expect(page.locator("[data-room-occupancy]")).toContainText("page 19");
+  await expect(page.getByText("140 seats from the seating schedule on page 19", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/room-seating.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator("[data-room-occupancy]")).toBeVisible();

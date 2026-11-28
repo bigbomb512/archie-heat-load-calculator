@@ -56,11 +56,15 @@ export function renderFrame({
       const link = locked
         ? `aria-disabled="true" title="${({ results: "Available once people and equipment are checked", system: "Available once the cooling load is calculated" })[key] || "Available after the previous step is complete"}"`
         : `href="${href}" ${current ? 'aria-current="step"' : ""}`;
-      return `<${tag} class="job-step ${done[key] ? "done" : ""} ${current ? "current" : ""} ${locked ? "locked" : ""}" ${link}>
-      <span class="job-step-num">${index + 1}</span><span class="job-step-copy"><b>${label}</b><small>${key === "results" && !status?.phase2_complete ? "After checking the house" : sub}</small></span></${tag}>`;
+      const hint = key === "results" && !status?.phase2_complete ? "After checking the house" : sub;
+      return `<${tag} class="job-step ${done[key] ? "done" : ""} ${current ? "current" : ""} ${locked ? "locked" : ""}" ${link}${locked ? "" : ` title="${escapeHtml(hint)}"`}>
+      <span class="job-step-num">${index + 1}</span><span class="job-step-copy"><b>${label}</b></span></${tag}>`;
     },
   ).join("")}</nav></header>`;
-  const statusBlock = `<div class="job-status-row"><p class="job-status" role="status">${escapeHtml(statusLine || "Reviewing the drawing set. You can close this page and return later.")}</p>${actionLabel ? `<button class="job-button" id="jobPrimaryAction">${escapeHtml(actionLabel)}</button>` : ""}</div>`;
+  const line = statusLine === undefined ? "Reviewing the drawing set. You can close this page and return later." : statusLine;
+  const statusBlock = line || actionLabel
+    ? `<div class="job-status-row"><p class="job-status" role="status">${escapeHtml(line)}</p>${actionLabel ? `<button class="job-button" id="jobPrimaryAction">${escapeHtml(actionLabel)}</button>` : ""}</div>`
+    : `<p class="job-status job-sr-only" role="status"></p>`;
   const summarySlot = `<section class="job-summary" data-job-summary aria-label="The answer so far" hidden></section>`;
   const tabs = active === "house"
     ? `<nav class="job-subtabs" aria-label="Check the house">${HOUSE_TABS.map(([key, label]) => {

@@ -315,11 +315,16 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) => row.fallback
+  // Steps that were skipped or got no answer: one folded line; each reason is inside (2026-11-28 compact pass).
+  const skipped = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) => row.fallback
     ? `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}:</strong> ${escapeHtml(row.reason || "")}</p>`
-    : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
-    + (data?.not_answered_tasks || []).map((row) =>
-      `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong> The checker refused the AI's reply twice${row.reason ? ` (${escapeHtml(row.reason)})` : ""}; the room keeps the area its other steps found.</p>`).join("") : "";
+    : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`) : [];
+  const unanswered = kind === "rooms" ? (data?.not_answered_tasks || []).map((row) =>
+      `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong>${row.reason ? ` ${escapeHtml(row.reason)}` : ""}; the room keeps the area its other steps found.</p>`) : [];
+  const skippedCount = skipped.length + unanswered.length;
+  const notNeeded = skippedCount
+    ? `<details class="job-stage-skipped" data-stage-skipped><summary>${skippedCount} step${skippedCount === 1 ? "" : "s"} skipped or not answered${unanswered.length ? "; those rooms keep the area found another way" : ""}</summary>${skipped.join("")}${unanswered.join("")}</details>`
+    : "";
   // Finished with parts it couldn't do: marked like a step that needs you, so it doesn't read as not started.
   const icon = state === "done" ? "✓" : state === "attention" || state === "unfinished" ? "!" : "";
   const flag = state === "attention" ? `<span class="job-stage-flag">Needs your action</span>`
@@ -358,14 +363,15 @@ function facts(status, plan) {
     status.weather_location ||
     status.weather_ai_pick ||
     status.weather_suggestion;
-  const weatherWhy = status.weather_location
-    ? "Selected for this job"
+  // The tag stays (an AI pick is never shown as confirmed); the AI's reasoning is its hover title.
+  const weatherTag = status.weather_location
+    ? "Selected"
     : status.weather_ai_pick
-      ? `Picked by the AI${status.weather_ai_why ? `: ${status.weather_ai_why}` : ""}`
+      ? "AI-picked"
       : weather
-        ? "Suggested from the site details"
-        : "Not identified yet";
-  const site = status.address || status.found_site || "Not identified yet";
+        ? "Suggested"
+        : "";
+  const weatherWhy = status.weather_ai_pick && !status.weather_location ? status.weather_ai_why || "" : "";
   // A house has no tenancy: what is over each room follows from its level (top floor under the roof).
   const aboveTerm = status.dwelling ? "What is above the rooms" : "Above the tenancy";
   const above = status.dwelling
@@ -373,17 +379,17 @@ function facts(status, plan) {
     : status.above && status.above !== "not_sure"
       ? status.above.replaceAll("_", " ")
       : "Not identified yet";
+  // The site is in the page header; the room names are on the plan, so their full list is folded away.
   return `<dl class="job-facts">
-    <div><dt>Site</dt><dd>${escapeHtml(site)}</dd></div>
-    <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}<small class="job-caption">${escapeHtml(weatherWhy)}</small></dd></div>
-    <div><dt>Rooms named on the drawings</dt><dd>${escapeHtml(named.length ? named.join(", ") : "Still reading the drawing set")}</dd></div>
+    <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}${weatherTag ? ` <span class="job-answer-badge muted" data-weather-tag${weatherWhy ? ` title="${escapeHtml(weatherWhy)}"` : ""}>${weatherTag}</span>` : ""}</dd></div>
+    <div><dt>Names on the drawings</dt><dd>${named.length ? `<details class="job-facts-more"><summary>${named.length} name${named.length === 1 ? "" : "s"}</summary>${escapeHtml(named.join(", "))}</details>` : "Still reading the drawing set"}</dd></div>
     <div><dt>${escapeHtml(aboveTerm)}</dt><dd>${escapeHtml(above)}</dd></div>
   </dl>`;
 }
 
 function statusSentence(data, status, plan) {
   if (status.phase1_complete)
-    return "The building loads are ready. Continue to Rooms when you are.";
+    return "";
   const order = [
     ["pages", data.reading],
     ["equipment", data.equipment],
@@ -616,7 +622,6 @@ export async function renderDrawings(project, projectId) {
         ${stagesMarkup(data, status, plan)}
       </ol>
       <section class="job-activity" data-ai-activity aria-label="AI activity">${activityMarkup(data, projectId)}</section>
-      <p class="job-caption">The review keeps going in the background. You can close this page and come back later.</p>
     </section>
     <section class="job-panel job-found-panel" aria-labelledby="found-title">
       <h2 id="found-title">Found so far</h2>

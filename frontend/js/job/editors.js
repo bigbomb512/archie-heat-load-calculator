@@ -13,8 +13,7 @@ export async function renderJobDetails(projectId) {
   return {
     status,
     content,
-    statusLine:
-      "Update the project details used with its drawings and weather data.",
+    statusLine: "",
     bind: () =>
       document
         .querySelector("#job-details-form")

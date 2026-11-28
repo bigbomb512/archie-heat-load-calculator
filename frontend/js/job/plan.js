@@ -273,7 +273,7 @@ export function planSvg(
 }
 
 export function lineLegend() {
-  return `<div class="job-legend" aria-label="Plan evidence legend"><span><i class="job-key"></i>Measured from the drawing</span><span><i class="job-key dashed"></i>Assumed: outline or scale not checked against a printed dimension</span><span><i class="job-key dotted"></i>AI estimate or room not traced</span></div>`;
+  return `<div class="job-legend" aria-label="Plan evidence legend"><span title="Measured from the drawing"><i class="job-key"></i>Measured</span><span title="Outline or scale not checked against a printed dimension"><i class="job-key dashed"></i>Assumed</span><span title="AI estimate, or the room isn't traced"><i class="job-key dotted"></i>AI estimate</span></div>`;
 }
 
 export function roomList(plan) {

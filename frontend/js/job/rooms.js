@@ -124,7 +124,7 @@ function roomState(room) {
   );
 }
 
-function roomRows(rooms, selected) {
+function roomRows(rooms, selected, shared = "") {
   return rooms
     .map((room) => {
       const selectedClass = room.room_id === selected.room_id ? "selected" : "";
@@ -133,7 +133,7 @@ function roomRows(rooms, selected) {
       const noOutline = !room.has_outline
         ? `<small class="job-row-source">No outline</small>`
         : "";
-      const source = room.area_label
+      const source = room.area_label && room.area_label !== shared
         ? `<small class="job-row-source">${escapeHtml(room.area_label)}</small>`
         : "";
       return `<tr class="${selectedClass}">
@@ -147,10 +147,13 @@ function roomRows(rooms, selected) {
 }
 
 function roomTable(rooms, selected) {
+  // 2026-11-28 compact pass: "Measured at the sheet's printed scale only" was repeated under every room.
+  const labels = rooms.map((room) => room.area_label || "").filter(Boolean);
+  const shared = labels.length > 1 && labels.every((label) => label === labels[0]) ? labels[0] : "";
   return `<div class="job-table-wrap"><table class="job-room-table">
     <thead><tr><th scope="col">Room</th><th scope="col">Area</th><th scope="col">Building load</th><th scope="col">Status</th></tr></thead>
-    <tbody>${roomRows(rooms, selected)}</tbody>
-  </table></div>`;
+    <tbody>${roomRows(rooms, selected, shared)}</tbody>
+  </table></div>${shared ? `<p class="job-caption" data-shared-area-source>Areas: ${escapeHtml(shared)}</p>` : ""}`;
 }
 
 function floorRoomLists(plan, selected, projectId) {
@@ -300,10 +303,10 @@ function roomDetails(plan, room, status, uses, editor = {}) {
 
   const areaLabel = room.area_label || "Area source not recorded";
   const areaValue =
-    room.area_m2 == null ? "Not available yet" : `${fmt(room.area_m2)} m²`;
+    room.area_m2 == null ? "—" : `${fmt(room.area_m2)} m²`;
   const heightValue =
     height?.ceiling_height_mm == null
-      ? "Not available yet"
+      ? "—"
       : `${fmt(height.ceiling_height_mm / 1000, 2)} m`;
   const areaNote =
     room.area_label ||
@@ -315,7 +318,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
         <thead><tr><th scope="col">Surface</th><th scope="col">m²</th><th scope="col">U</th><th scope="col">Beyond it</th><th scope="col">kW</th></tr></thead>
         <tbody>${surfaceRows(groups)}</tbody>
       </table></div>`
-    : `<p class="job-muted">Surface details will appear as the room boundaries are worked out.</p>`;
+    : "";
   const wallList = walls.length
     ? `<button class="job-link-button" data-wall-list>${editor.showWalls ? "Hide each wall" : "See each wall on the plan"}</button>
       ${
@@ -336,26 +339,25 @@ function roomDetails(plan, room, status, uses, editor = {}) {
             `<li>${escapeHtml(plainNote(item.reason || item.component || "Assumption recorded"))} <button class="job-link-button" data-edit-envelope>Change</button></li>`,
         )
         .join("")}</ul>`
-    : `<p class="job-muted">No assumptions are recorded for this room’s building load.</p>`;
+    : "";
   const useEditor = room.kind !== "refrigeration" && room.kind !== "not_a_room" ? useOptions(uses, room) : "";
-  const useReason = room.use?.rationale ? `<p class="job-caption" data-room-use-reason>${escapeHtml(room.use.rationale)} Confidence: ${escapeHtml(room.use.confidence_band || "not recorded")}.</p>` : "";
+  const useReason = room.use?.rationale ? `<p class="job-caption" data-room-use-reason>${escapeHtml(plainNote(room.use.rationale))}</p>` : "";
+  // The reason and its evidence are folded together under one toggle (2026-11-28 compact pass).
   const factors = room.use?.use_assessment?.factors || [];
-  const useFactors = factors.length ? `<details><summary>Why this use was selected</summary><ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul></details>` : "";
+  const useFactors = useReason || factors.length ? `<details class="job-room-why"><summary>Why this use was selected</summary>${useReason}${factors.length ? `<ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul>` : ""}</details>` : "";
   return `<section class="job-panel job-room-detail" aria-labelledby="room-detail-title">
     <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.display_name || room.name)}</h2>
     <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Cooled room"))}</p>
-    ${useReason}${useFactors}${useEditor}
-    ${room.occupancy?.value != null ? `<p class="job-caption" data-room-occupancy><strong>Design occupants (operating loads): ${fmt(room.occupancy.value, 0)}</strong><br>${escapeHtml(room.occupancy.rationale || "Saved occupancy; source not recorded.")}</p>` : ""}
+    ${useFactors}${useEditor}
+    ${room.occupancy?.value != null ? `<div class="job-caption" data-room-occupancy><strong>People: ${fmt(room.occupancy.value, 0)}</strong> <details class="job-room-why"><summary>Where this comes from</summary>${escapeHtml(plainNote(room.occupancy.rationale || "Saved occupancy; source not recorded."))}</details></div>` : ""}
     <dl class="job-key-facts">
       <div><dt>Floor area</dt><dd class="${areaClass(room)}" title="${escapeHtml(areaLabel)}">${escapeHtml(areaValue)}</dd></div>
       <div><dt>Ceiling height</dt><dd class="${height?.origin === "preliminary_fallback" ? "assumed" : ""}" title="${escapeHtml(height?.origin || "Height source not recorded")}">${escapeHtml(heightValue)} <button class="job-link-button" data-edit-height>Change</button></dd></div>
-      <div><dt>Building load</dt><dd>${room.phase1_kw == null ? "Not calculated yet" : `${fmt(room.phase1_kw)} kW`}</dd></div>
+      <div><dt>Building load</dt><dd>${room.phase1_kw == null ? "—" : `${fmt(room.phase1_kw)} kW`}</dd></div>
     </dl>
     <p class="job-caption">Area: ${escapeHtml(areaNote)} Height: ${escapeHtml(height?.origin === "preliminary_fallback" ? "Typical 2.7 m height" : height?.origin ? "Matched to drawing evidence" : "Height not available yet")}.</p>
-    <h3>What the load is worked out from</h3>
-    ${surfaceTable}${wallList}
-    <h3>What the AI assumed</h3>
-    ${assumptionList}
+    ${surfaceTable || wallList ? `<h3>What the load is worked out from</h3>${surfaceTable}${wallList}` : ""}
+    ${assumptionList ? `<h3>What the AI assumed</h3>${assumptionList}` : ""}
     <div class="job-editor-actions">
       <a class="job-button secondary" href="#/job/${encodeURIComponent(plan.project_id || "")}/fix">Quick fixes for every room</a>
       <button class="job-button secondary" data-edit-area>Correct the area</button>

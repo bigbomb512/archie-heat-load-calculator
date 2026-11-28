@@ -280,14 +280,21 @@ def _other_items(drawing, supervisor, result, rooms, status):
     items = []
     unresolved = drawing.get("unresolved") or []
     if unresolved:
-        names = []
+        names, other_steps = [], 0
         for row in unresolved:
             target = str(row.get("target") or "")
             match = re.search(r"room[-_]([a-z0-9-]+?)(?:[-_]page[-_]\d+)?$", target, re.I)
-            name = match.group(1).replace("-", " ").title() if match else str(row.get("label") or "room")
+            if not match:
+                # A step that isn't about one room (e.g. outlining the tenancy on a page): counted, never named as a
+                # room (2026-11-28: a house read "Couldn't trace the outline of Outlining the tenancy, Kitchen").
+                other_steps += 1
+                continue
+            name = match.group(1).replace("-", " ").title()
             if name not in names:
                 names.append(name)
-        title = "Couldn't trace the outline of " + _join(names)
+        others = _plural(other_steps, "other drawing step", "other drawing steps")
+        title = ("Couldn't trace the outline of " + _join(names) + (f" (and {others})" if other_steps else "")
+                 if names else f"{_plural(other_steps, 'drawing step', 'drawing steps')} couldn't finish")
         action = (drawing.get("recovery") or {}).get("action") or "resume"
         items.append(_item("drawing-task", "drawing_task", "check", title,
                            "They use the area found from the drawings' dimensions instead.", "drawings",

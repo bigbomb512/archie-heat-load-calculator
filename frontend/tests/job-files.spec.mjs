@@ -56,7 +56,9 @@ test("a report that can't be built says why, and an out-of-date result asks for 
   await mockResults(page, { stale: true });
   await page.goto("/#/job/job-1/results");
   await page.reload();
-  await expect(page.getByText("Update the final load before creating the report.")).toBeVisible();
+  // Out of date: the bar offers the update (or the rooms to review) and the report button stays hidden
+  // (2026-11-28 compact pass: the card's badge says "Out of date", the bar keeps only its action).
+  await expect(page.locator(".job-stale-note")).toContainText(/Update the final load|Review room inputs before updating/);
   await expect(page.getByRole("button", { name: "Create the report" })).toHaveCount(0);
 });
 

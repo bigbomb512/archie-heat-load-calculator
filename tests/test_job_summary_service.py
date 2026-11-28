@@ -57,6 +57,17 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("WIR (28.6 m²)", next(row for row in summary["todos"] if row["id"] == "size:small")["detail"])
         self.assertIn("Bedroom 1 (3.0 m²)", next(row for row in summary["todos"] if row["id"] == "size:robe")["detail"])
 
+    def test_a_step_that_is_not_one_room_is_counted_not_named_as_a_room(self):
+        summary = self.summary([room("office", "Office")], drawing={"unresolved": [
+            {"task": "P0_tenancy_outline", "target": "page-25", "label": "Outlining the tenancy"},
+            {"task": "P0_outline_corners", "target": "room-kitchen-page-9", "label": "Matching outlines"}]})
+        row = next(row for row in summary["todos"] if row["kind"] == "drawing_task")
+        self.assertEqual(row["title"], "Couldn't trace the outline of Kitchen (and 1 other drawing step)")
+        only = self.summary([room("office", "Office")], drawing={"unresolved": [
+            {"task": "P0_tenancy_outline", "target": "page-25", "label": "Outlining the tenancy"}]})
+        self.assertEqual(next(row for row in only["todos"] if row["kind"] == "drawing_task")["title"],
+                         "1 drawing step couldn't finish")
+
     def test_other_sources_all_rules(self):
         summary = self.summary([room("office", "Office")], drawing={"unresolved": [
             {"task": "P0_room_outlines", "target": "room-dining-page-9"},
