@@ -494,7 +494,13 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
       <div><h1>${resultLabel.status === "design" ? "Design" : "Preliminary"} cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>
         <div class="job-result-total-line"><strong class="job-total">${fmt(total)} <span>kW</span></strong>
           ${labelBadge(resultLabel.text ? resultLabel : { status: "preliminary", text: "Preliminary" })}</div>
-        ${resultLabel.status === "preliminary" && resultLabel.text ? `<p class="job-label-why" data-label-why>${escapeHtml(resultLabel.text)}. Answer the open questions below to make it a design figure.</p>` : ""}
+        ${resultLabel.status === "preliminary" && resultLabel.text ? `<p class="job-label-why" data-label-why>${escapeHtml(resultLabel.text)}.${
+          (resultLabel.self_checks || []).length
+            ? ` <span data-self-checks>${(resultLabel.self_checks || []).map(escapeHtml).join(" ")}</span>`
+            : ""}${resultLabel.count || !(resultLabel.self_checks || []).length ? " Answer the open questions below to make it a design figure." : ""}</p>` : ""}
+        ${(resultLabel.self_check_warnings || []).length
+          ? `<p class="job-label-why" data-self-check-warnings>Check: ${(resultLabel.self_check_warnings || []).map(escapeHtml).join(" ")}</p>`
+          : ""}
         <p>${statusSentence}</p>
         ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}
