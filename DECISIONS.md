@@ -5,6 +5,15 @@ questions the build skipped. A person must decide them.
 
 <!-- Newest first. -->
 
+## 2026-11-28 — Task 9 follow-up: the W/m² band warns, it doesn't block
+- **Choice:** following a review of #40, rooms not counted and windows not placed still keep a result Preliminary,
+  because they're concrete gaps. The 39–108 W/m² band is now a warning only: it shows as a "Check:" line under the
+  result (`self_check_warnings`) and doesn't change the label.
+- **Why:** the band comes from three checked houses, all large multi-storey sets (#38). A sound single-storey house
+  or terrace could fall outside it, and calling it short would be a false alarm. Revisit it once more varied,
+  independently checked houses exist.
+- **Undo:** set `"blocks": True` on the W/m² finding in `backend/result_self_checks.py`.
+
 ## 2026-11-28 — Task 9: self-check limits (provisional)
 - **Choice:** a result stays Preliminary while any room on the room list isn't counted; for houses, also while fewer
   than 75% of the scheduled windows are on a wall, or while the load is outside 39–108 W per cooled m². The checked

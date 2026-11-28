@@ -93,7 +93,7 @@ last change, and Playwright where frontend files changed (#40: 106 passed).
   **The Turramurra reference becomes 17.20 kW (+18.8%)** once its windows are re-placed: 7 real windows that the
   reference also missed. Update `CLAUDE.md`'s 14.48 kW when it merges.
 - Task 9, [PR #40](https://github.com/bigbomb512/archie-heat-load-calculator/pull/40): self-checks keep a result Preliminary and say why (rooms not counted, under 75% of
-  scheduled windows placed, outside 39–108 W/m² for houses). The limits are provisional (DECISIONS.md).
+  scheduled windows placed). For houses, a load outside 39–108 W/m² shows as a warning but doesn't hold the label. The limits are provisional (DECISIONS.md).
 - Task 10, [PR #41](https://github.com/bigbomb512/archie-heat-load-calculator/pull/41): the editors are gone. A weather pick made from an earlier address is now labelled out of
   date. Noticed: one Butcher Buffet job (`…1792650630`) has its weather picked as Adelaide (Melrose Park, SA).
 - Task 11, blocked. From CI on each branch: #13 (cryptography) and #15 (pvlib) passed the smoke gate on 26 Nov;
