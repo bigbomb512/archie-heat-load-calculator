@@ -355,7 +355,9 @@ async function saveAll(form, summary, projectId, host) {
       rooms.push({ room_id: roomId, cooled: action?.value === true || action?.value === "true" });
     } else if (choice === "join") {
       const action = actions.find((row) => row.type === "join");
-      joins.push({ action: "join", room_ids: action?.room_ids || [], name: action?.name });
+      // A robe join keeps the bedroom's use and stays cooled, whichever piece is larger (it says so in the action).
+      joins.push({ action: "join", room_ids: action?.room_ids || [], name: action?.name,
+                   ...(action?.use ? { use: action.use } : {}), ...(typeof action?.cooled === "boolean" ? { cooled: action.cooled } : {}) });
     }
     const use = item.querySelector('[data-input="use"]')?.value;
     if (use) rooms.push({ room_id: roomId, use });
