@@ -21,7 +21,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v15"  # v15: tags printed up the page are read (set 16: 9 of 28 windows, 2026-11-28); v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
+VERSION = "house-windows-text-v16"  # v16: each window left off the load says its glass m² and why (2026-11-28); v15: tags printed up the page are read (set 16: 9 of 28 windows, 2026-11-28); v14: marks compared without padding/hyphens (W01 = W1 = W-01), levels compared loosely, full offset precision and placement evidence; an older saved scan is re-run (2026-11-24)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -163,6 +163,51 @@ def _outside_edges(trace, records, mm_per_px):
                   + [index for index in unknown if index not in along])
 
 
+def _explain_lost_glass(result, windows, page_tags, records, scopes):
+    """List each window left off the load with its glass area, the traced room its tag sits in (cooled or not) and a
+    cause (result["glass_lost"]; the "unplaced" rows stay as they are), and total the glass in and out of the load
+    (result["glass_coverage"])."""
+    sizes = {}
+    for row in windows:
+        sizes.setdefault(house_windows.normalized_mark(row.get("mark", "")), set()).add(house_windows.window_area_m2(row))
+    placed_at = {(row.get("tag_position") or {}).get("page"): set() for row in result["placed"]}
+    for row in result["placed"]:
+        position = row.get("tag_position") or {}
+        placed_at.setdefault(position.get("page"), set()).add((round(position.get("x", 0)), round(position.get("y", 0))))
+    used = set()
+    lost = []
+    for unplaced in result["unplaced"]:
+        mark = house_windows.normalized_mark(unplaced.get("mark", ""))
+        if not mark or unplaced.get("skipped"):
+            continue
+        row = {key: unplaced.get(key) for key in ("mark", "page", "reason")}
+        area = sizes.get(mark, set())
+        row["area_m2"] = next(iter(area)) if len(area) == 1 else None
+        tag = next((tag for index, tag in enumerate(page_tags.get(row.get("page"), []))
+                    if house_windows.normalized_mark(tag["mark"]) == mark and (row.get("page"), index) not in used
+                    and (round(tag["x"]), round(tag["y"])) not in placed_at.get(row.get("page"), set())), None)
+        room = None
+        if tag is not None:
+            used.add((row.get("page"), page_tags[row["page"]].index(tag)))
+            room = next((trace for trace in records if trace.get("page") == row.get("page")
+                         and house_windows._inside_room((tag["x"], tag["y"]), trace.get("points_image_px") or [])), None)
+        if room is not None:
+            row["tag_room"] = room.get("room_label")
+        cooled = None if room is None else scopes.get(room.get("room_id")) in COOLED
+        row["cause"] = house_windows.loss_cause(row.get("reason"), cooled)
+        lost.append(row)
+    # A window over a void is tagged on both floor plans: too tall for the lower room, and in no room on the floor above
+    # (the void isn't traced). It is one window, counted once.
+    tall = {house_windows.normalized_mark(row["mark"]): row.get("page") for row in lost if row["cause"] == "double_height"}
+    for row in lost:
+        mark = house_windows.normalized_mark(row["mark"])
+        if row["cause"] == "no_room" and mark in tall and tall[mark] != row.get("page"):
+            row["cause"] = "double_height"
+            row["same_window_as_page"] = tall[mark]
+    result["glass_lost"] = lost
+    result["glass_coverage"] = house_windows.glass_coverage(result["placed"], [row for row in lost if "same_window_as_page" not in row])
+
+
 def apply(web, project, root, read_page=None):
     """Place the text-layer windows of a dwelling on its traced rooms. Returns the saved result, or None for a shop."""
     root = Path(root)
@@ -213,6 +258,7 @@ def apply(web, project, root, read_page=None):
             reviewer_room_geometry_service._atomic_json(root / RESULT_FILE, result)
             return result
         close, read_page = _pdf_pages(source)
+    page_tags = {}
     try:
         windows = []
         for number in schedule_pages:
@@ -247,6 +293,7 @@ def apply(web, project, root, read_page=None):
             tags = house_windows.find_window_tags(words + (flow(page) if flow else []), page, level)
             rooms, scale = [], _page_scale(root, page, records, sx)
             placement_tags = [{**tag, "x": tag["x"] * sx, "y": tag["y"] * sy} for tag in tags]
+            page_tags[page] = placement_tags
             for trace in traces:
                 mm_per_px = float(trace["calibration"]["mm_per_px"])
                 rooms.append({"trace_id": trace["trace_id"], "points": trace["points_image_px"],
@@ -371,6 +418,7 @@ def apply(web, project, root, read_page=None):
             result["unplaced"].append({"mark": window["mark"], "page": window["page"],
                 "reason": "Window is listed in the schedule but is not matched to a traced room wall."})
             unplaced_marks.add(mark)
+    _explain_lost_glass(result, windows, page_tags, records, scopes)
     if any_saved and web is not None:   # once, after every room's windows (a house has many rooms; each took a rebuild)
         # Deferred while the drawing questions run (autonomous_tasks_service.deferred_evidence_rebuild).
         from backend.autonomous_tasks_service import evidence_changed

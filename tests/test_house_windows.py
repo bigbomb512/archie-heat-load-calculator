@@ -301,3 +301,27 @@ class RotatedTagTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LostGlassTests(unittest.TestCase):
+    """Each window left off the load says its glass and why (2026-11-28)."""
+
+    def test_causes(self):
+        cause = hw.loss_cause
+        self.assertEqual(cause("head 4.16 m is above the room's ceiling 2.70 m (double-height space?)", True), "double_height")
+        self.assertEqual(cause("no outside wall within 3000 mm of the tag", False), "uncooled_room")
+        self.assertEqual(cause("no outside wall within 3000 mm of the tag", True), "outline_short")
+        self.assertEqual(cause("no outside wall within 3000 mm of the tag", None), "no_room")
+        self.assertEqual(cause("Window is listed in the schedule but is not matched to a traced room wall.", None), "not_found")
+        self.assertEqual(cause("the schedule gives this mark more than one size; which one is here isn't printed", None), "schedule")
+
+    def test_area_and_totals(self):
+        self.assertEqual(hw.window_area_m2({"width_mm": 2400, "height_mm": 2000}), 4.8)
+        self.assertIsNone(hw.window_area_m2({"width_mm": 2400}))
+        totals = hw.glass_coverage(
+            [{"width_m": 2.0, "sill_height_m": 0.4, "head_height_m": 2.4}],
+            [{"cause": "no_room", "area_m2": 3.0}, {"cause": "no_room", "area_m2": 1.5}, {"cause": "double_height", "area_m2": None}])
+        self.assertEqual(totals["in_load_m2"], 4.0)
+        self.assertEqual(totals["lost_m2"], 4.5)
+        self.assertEqual(totals["by_cause"]["no_room"], {"windows": 2, "m2": 4.5})
+        self.assertEqual(totals["lost_windows"], 3)
