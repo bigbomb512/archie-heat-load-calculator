@@ -2462,3 +2462,156 @@ body.job-preview {
   text-align: right;
   padding-bottom: 4px;
 }
+
+/* --- 2026-11-28 things-to-check list: sections, cards, grouped rooms ---------------------------------------- */
+.job-todos {
+  padding: 16px 20px;
+}
+.job-todos h2 {
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+.job-todo-section {
+  margin-top: 12px;
+}
+.job-todo-section[hidden] {
+  display: none;
+}
+.job-todo-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+  margin: 0 0 8px;
+  text-transform: none;
+}
+.job-todo-section h3 span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  font-size: 12px;
+}
+.job-todo-section.blocks h3 span {
+  background: #f6dcdb;
+  color: var(--ui-danger, #a33432);
+}
+.job-todo-section.changes_number h3 span {
+  background: var(--needs);
+  color: var(--needs-ink);
+}
+.job-todo-section ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.job-todo {
+  display: block;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 6px;
+  background: var(--sheet);
+}
+.job-todo.blocks {
+  border-left-color: var(--ui-danger, #a33432);
+}
+.job-todo.changes_number {
+  border-left-color: var(--ui-warning, #805a17);
+}
+.job-todo-title {
+  gap: 4px 10px;
+}
+.job-todo-title strong {
+  font-size: 15px;
+}
+.job-todo-detail {
+  font-size: 13px;
+}
+.job-todo-actions {
+  gap: 8px;
+  margin-top: 8px;
+}
+.job-todo-actions .job-button,
+.job-todo-actions .job-todo-link,
+.job-todo-more > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+.job-todo-more > summary {
+  border: 1px solid var(--line);
+  color: var(--action);
+  list-style: none;
+}
+.job-todo-more > summary::-webkit-details-marker {
+  display: none;
+}
+.job-todo-more[open] {
+  flex-basis: 100%;
+}
+.job-todo-reason {
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.job-todo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.job-todo-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--page, #f6f8fa);
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+}
+.job-todo-chip:hover,
+.job-todo-chip:focus-visible {
+  border-color: var(--action);
+  color: var(--action);
+}
+.job-todos > [data-todo-more] {
+  margin-top: 12px;
+}
+/* Wide screens: the card's text on the left, its buttons on the right, so most cards are one or two lines. */
+@media (min-width: 761px) {
+  .job-todo:not(.job-todo-group) .job-todo-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 16px;
+    align-items: center;
+  }
+  .job-todo:not(.job-todo-group) .job-todo-title,
+  .job-todo:not(.job-todo-group) .job-todo-detail,
+  .job-todo:not(.job-todo-group) .job-todo-message {
+    grid-column: 1;
+  }
+  .job-todo:not(.job-todo-group) .job-todo-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+  .job-todo:not(.job-todo-group) .job-todo-actions:has(details[open]) {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
+    margin-top: 8px;
+  }
+}

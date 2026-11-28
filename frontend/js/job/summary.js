@@ -114,7 +114,7 @@ function actionControls(todo, projectId, uses) {
           .join("")}</select></label>${actionButton({ ...action, label: "Save use" }, todo)}</span></details>`;
       if (action.type === "link") {
         const step = action.step || todo.step || "drawings";
-        return `<a class="job-todo-link" href="#/job/${encodeURIComponent(projectId)}/${encodeURIComponent(step)}">${escapeHtml(action.label || "Open")}</a>`;
+        return `<a class="job-todo-link job-button secondary" href="#/job/${encodeURIComponent(projectId)}/${encodeURIComponent(step)}">${escapeHtml(action.label || "Open")}</a>`;
       }
       if (action.type === "recalculate") return "";
       return actionButton(action, todo);
@@ -122,10 +122,17 @@ function actionControls(todo, projectId, uses) {
     .join("");
 }
 
+const SECTION_TITLE = {
+  blocks: "Not in the total yet",
+  changes_number: "Could change the total",
+  check: "Worth a check",
+};
+const GROUP_AT = 3;
+
 function todoItem(todo, projectId, uses, index) {
   const impact = todo.impact && Number.isFinite(Number(todo.impact.kw)) ? `<span class="job-todo-impact" data-todo-impact>${escapeHtml(todo.impact.text || `${fmt(todo.impact.kw)} kW`)}</span>` : "";
   return `<li class="job-todo ${escapeHtml(todo.severity || "check")}" data-todo="${escapeHtml(todo.id)}" data-todo-kind="${escapeHtml(todo.kind || "")}"${index >= SHOWN ? " data-todo-extra hidden" : ""}>
-    <span class="job-todo-severity">${escapeHtml(SEVERITY[todo.severity] || "Check")}</span>
+    <span class="job-todo-severity job-sr-only">${escapeHtml(SEVERITY[todo.severity] || "Check")}</span>
     <div class="job-todo-body">
       <p class="job-todo-title"><strong>${escapeHtml(todo.title || "")}</strong>${impact}</p>
       ${todo.detail ? `<p class="job-todo-detail">${escapeHtml(todo.detail)}</p>` : ""}
@@ -135,13 +142,88 @@ function todoItem(todo, projectId, uses, index) {
   </li>`;
 }
 
+// Rooms with the same problem and nothing to type are one card: the reason once, then each room as a chip that
+// opens it (2026-11-28: 16 cards said "walls and windows weren't worked out", each offering "Not cooled").
+function groupable(todo) {
+  return Boolean(todo.room?.room_id && todo.detail) && (todo.actions || []).every((action) => ["link", "cooled"].includes(action.type));
+}
+
+function groupReason(detail) {
+  const text = String(detail || "")
+    .replace(/^Its\s+/i, "")
+    .replace(/,?\s*so it has no load yet\.?$/i, ".")
+    .replace(/^It\s+was\s+/i, "");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function todoGroup(rows, projectId, index) {
+  const first = rows[0];
+  const chips = rows
+    .map((todo) => `<a class="job-todo-chip" data-todo="${escapeHtml(todo.id)}" href="#/job/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(todo.room.room_id)}">${escapeHtml(todo.room.name || todo.title)}</a>`)
+    .join("");
+  return `<li class="job-todo job-todo-group ${escapeHtml(first.severity || "check")}" data-todo-group="${escapeHtml(first.kind || "")}"${index >= SHOWN ? " data-todo-extra hidden" : ""}>
+    <span class="job-todo-severity job-sr-only">${escapeHtml(SEVERITY[first.severity] || "Check")}</span>
+    <div class="job-todo-body">
+      <p class="job-todo-title"><strong>${rows.length} rooms</strong><span class="job-todo-reason">${escapeHtml(groupReason(first.detail))}</span></p>
+      <div class="job-todo-chips">${chips}</div>
+    </div>
+  </li>`;
+}
+
+// Entries in the server's order: a group sits where its first room was.
+function entries(todos) {
+  const counts = new Map();
+  todos.forEach((todo) => {
+    if (!groupable(todo)) return;
+    const key = `${todo.severity}|${todo.kind}|${todo.detail}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const placed = new Map();
+  const list = [];
+  todos.forEach((todo) => {
+    const key = `${todo.severity}|${todo.kind}|${todo.detail}`;
+    if (groupable(todo) && counts.get(key) >= GROUP_AT) {
+      if (!placed.has(key)) {
+        const group = { group: [] };
+        placed.set(key, group);
+        list.push(group);
+      }
+      placed.get(key).group.push(todo);
+    } else list.push({ todo });
+  });
+  return list;
+}
+
 function todoList(summary, projectId) {
   const todos = (summary.todos || []).filter((todo) => todo.kind !== "update_load" || !(todo.actions || []).some((a) => a.type === "recalculate"));
   if (!todos.length) return "";
-  const more = todos.length - SHOWN;
+  // Sections follow the list's own order (the server sorts by severity): a new heading starts where the severity changes.
+  const runs = [];
+  entries(todos).forEach((entry) => {
+    const severity = (entry.group ? entry.group[0] : entry.todo).severity || "check";
+    if (!runs.length || runs[runs.length - 1].severity !== severity) runs.push({ severity, rows: [] });
+    runs[runs.length - 1].rows.push(entry);
+  });
+  let index = 0;
+  const sections = runs
+    .map(({ severity, rows }) => {
+      const start = index;
+      const items = rows.map((entry) => {
+        const html = entry.group ? todoGroup(entry.group, projectId, index) : todoItem(entry.todo, projectId, summary.uses, index);
+        index += 1;
+        return html;
+      }).join("");
+      const count = rows.reduce((sum, entry) => sum + (entry.group ? entry.group.length : 1), 0);
+      return `<section class="job-todo-section ${escapeHtml(severity)}"${start >= SHOWN ? " data-todo-extra hidden" : ""}>
+        <h3>${escapeHtml(SECTION_TITLE[severity] || "Worth a check")} <span>${count}</span></h3>
+        <ol>${items}</ol>
+      </section>`;
+    })
+    .join("");
+  const more = index - SHOWN;
   return `<div class="job-todos" id="job-todo-list" data-todo-list hidden>
-    <h2>To do, most important first</h2>
-    <ol>${todos.map((todo, index) => todoItem(todo, projectId, summary.uses, index)).join("")}</ol>
+    <h2>Things to check</h2>
+    ${sections}
     ${more > 0 ? `<button type="button" class="job-button secondary" data-todo-more>Show ${more} more</button>` : ""}
   </div>`;
 }
